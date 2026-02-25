@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Usage: ./dev
+# Run once to start, run again to stop.
+
+PID_FILE="/tmp/digitalsov.pids"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+
+stop() {
+  if [ ! -f "$PID_FILE" ]; then
+    echo "⬛  Not running."
+    return
+  fi
+
+  read -r BACK_PID FRONT_PID < "$PID_FILE"
+
+  echo "⏹  Stopping..."
+
+  [ -n "$BACK_PID"  ] && kill "$BACK_PID"  2>/dev/null && echo "   backend  (pid $BACK_PID) stopped"
+  [ -n "$FRONT_PID" ] && kill "$FRONT_PID" 2>/dev/null && echo "   frontend (pid $FRONT_PID) stopped"
+
+  rm -f "$PID_FILE"
+  echo "✅  Done."
+}
+
+start() {
+  echo "▶  Starting DigitalSov..."
+
+  # Backend
+  cd "$ROOT/backend" || exit 1
+  .venv/bin/uvicorn app.main:app --reload --port 8000 \
+    > /tmp/digitalsov-backend.log 2>&1 &
+  BACK_PID=$!
+
+  # Frontend
+  cd "$ROOT/frontend" || exit 1
+  npm run dev \
+    > /tmp/digitalsov-frontend.log 2>&1 &
+  FRONT_PID=$!
+
+  echo "$BACK_PID $FRONT_PID" > "$PID_FILE"
+
+  echo "   backend  → http://localhost:8000  (pid $BACK_PID)"
+  echo "   frontend → http://localhost:5173  (pid $FRONT_PID)"
+  echo ""
+  echo "   logs: tail -f /tmp/digitalsov-backend.log"
+  echo "         tail -f /tmp/digitalsov-frontend.log"
+  echo ""
+  echo "✅  Running. Run ./dev again to stop."
+}
+
+# Toggle
+if [ -f "$PID_FILE" ]; then
+  read -r BACK_PID FRONT_PID < "$PID_FILE"
+  if kill -0 "$BACK_PID" 2>/dev/null || kill -0 "$FRONT_PID" 2>/dev/null; then
+    stop
+    exit 0
+  else
+    rm -f "$PID_FILE"  # stale file, fall through to start
+  fi
+fi
+
+start
