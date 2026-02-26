@@ -9,6 +9,7 @@ backend/__pycache__/
 backend/**/__pycache__/
 backend/**/*.pyc
 backend/finance.db
+backend/api_token.txt
 
 # Node
 frontend/node_modules/

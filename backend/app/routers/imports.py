@@ -11,6 +11,9 @@ from ..schemas import ColumnMappingInput, ImportRecord, ImportResponse, PatchImp
 from ..services.csv_importer import import_csv, import_csv_with_mapping, import_paypal_csv, import_pdf_with_mapping, preview_csv
 from ..services.pdf_extractor import MAX_PREVIEW_ROWS, extract_pdf, extract_txt
 
+MAX_CSV_BYTES = 10 * 1024 * 1024      # 10 MB
+MAX_PDF_BYTES = 25 * 1024 * 1024      # 25 MB
+
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 
@@ -27,6 +30,7 @@ async def upload_csv_legacy(
 ):
     _require_csv(file)
     content = await file.read()
+    _require_max_size(content, MAX_CSV_BYTES, "CSV")
     _require_content(content)
 
     try:
@@ -52,6 +56,7 @@ async def preview_csv_endpoint(
 ):
     _require_csv(file)
     content = await file.read()
+    _require_max_size(content, MAX_CSV_BYTES, "CSV")
     _require_content(content)
 
     try:
@@ -92,6 +97,7 @@ async def import_csv_endpoint(
         raise HTTPException(status_code=422, detail=exc.errors())
 
     content = await file.read()
+    _require_max_size(content, MAX_CSV_BYTES, "CSV")
     _require_content(content)
 
     try:
@@ -123,6 +129,7 @@ async def import_paypal_endpoint(
 ):
     _require_csv(file)
     content = await file.read()
+    _require_max_size(content, MAX_CSV_BYTES, "CSV")
     _require_content(content)
 
     try:
@@ -147,6 +154,7 @@ async def preview_pdf_endpoint(
 ):
     _require_pdf_or_txt(file)
     content = await file.read()
+    _require_max_size(content, MAX_PDF_BYTES, "PDF/TXT")
     _require_content(content)
 
     fname = file.filename or "upload.pdf"
@@ -186,6 +194,7 @@ async def import_pdf_endpoint(
         raise HTTPException(status_code=422, detail=exc.errors())
 
     content = await file.read()
+    _require_max_size(content, MAX_PDF_BYTES, "PDF/TXT")
     _require_content(content)
 
     try:
@@ -311,3 +320,11 @@ def _require_pdf_or_txt(file: UploadFile) -> None:
 def _require_content(content: bytes) -> None:
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+
+def _require_max_size(content: bytes, max_bytes: int, label: str) -> None:
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{label} file too large (>{max_bytes // (1024*1024)} MB).",
+        )

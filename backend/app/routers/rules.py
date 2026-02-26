@@ -41,6 +41,7 @@ def list_rules(db: Session = Depends(get_db)):
 
 @router.post("/", response_model=RuleSchema, status_code=201, summary="Create a rule")
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
+    _validate_pattern(payload.pattern, payload.match_type)
     _require_category(db, payload.category_id)
     rule = Rule(**payload.model_dump())
     db.add(rule)
@@ -54,6 +55,7 @@ def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
 @router.put("/{rule_id}", response_model=RuleSchema, summary="Update a rule")
 def update_rule(rule_id: int, payload: RuleUpdate, db: Session = Depends(get_db)):
     rule = _get_or_404(db, rule_id)
+    _validate_pattern(payload.pattern, payload.match_type)
     _require_category(db, payload.category_id)
     for field, val in payload.model_dump().items():
         setattr(rule, field, val)
@@ -192,6 +194,7 @@ def get_rule_suggestions(db: Session = Depends(get_db)):
 )
 def apply_rule_suggestion(payload: ApplySuggestionRequest, db: Session = Depends(get_db)):
     _require_category(db, payload.category_id)
+    _validate_pattern(payload.pattern, payload.match_type)
     rule = Rule(
         pattern=payload.pattern,
         match_type=payload.match_type,
@@ -232,6 +235,20 @@ def _rule_matches(pattern: str, match_type: str, description_norm: str) -> bool:
         except re.error:
             return False
     return False
+
+
+def _validate_pattern(pattern: str, match_type: str) -> None:
+    """Basic safety guard to prevent catastrophic regexes and unbounded patterns."""
+    if len(pattern) > 200:
+        raise HTTPException(status_code=422, detail="Pattern too long (max 200 chars).")
+    if match_type == "regex":
+        # Disallow nested quantifiers like (.+)+ or (.*){2,} which can backtrack catastrophically.
+        if re.search(r"\([^)]*[*+][^)]*\)[*+]", pattern):
+            raise HTTPException(status_code=422, detail="Regex pattern too complex; avoid nested quantifiers.")
+        try:
+            re.compile(pattern, re.IGNORECASE)
+        except re.error as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid regex: {exc.msg}")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

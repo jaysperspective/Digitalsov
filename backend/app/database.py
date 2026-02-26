@@ -22,11 +22,13 @@ def _sanitize_profile_name(name: str) -> str:
     return re.sub(r"[^a-z0-9_-]", "", name.lower())[:50]
 
 
-def get_or_create_engine(profile: str) -> Engine:
+def get_or_create_engine(profile: str, *, allow_create: bool = False) -> Engine:
     safe = _sanitize_profile_name(profile) or "default"
     if safe not in _engines:
         PROFILES_DIR.mkdir(parents=True, exist_ok=True)
         db_path = PROFILES_DIR / f"{safe}.db"
+        if not allow_create and not db_path.exists():
+            raise FileNotFoundError(f"Profile '{safe}' does not exist.")
         engine = create_engine(
             f"sqlite:///{db_path}",
             connect_args={"check_same_thread": False},
@@ -97,7 +99,7 @@ def init_profile_db(name: str) -> str:
     is_new_db = not db_path.exists()
 
     # create_all ensures tables exist for new DBs; no-op for existing ones.
-    engine = get_or_create_engine(safe)
+    engine = get_or_create_engine(safe, allow_create=True)
 
     # Run Alembic migrations — stamps new DBs to head, upgrades existing ones.
     _run_alembic_upgrade(db_url, is_new_db=is_new_db)
@@ -128,7 +130,11 @@ def get_profile_name(x_profile: str = Header(default="default")) -> str:
 def get_db(
     profile: str = Depends(get_profile_name),
 ) -> Generator[Session, None, None]:
-    engine = get_or_create_engine(profile)
+    try:
+        engine = get_or_create_engine(profile)
+    except FileNotFoundError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=str(exc))
     _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db = _SessionLocal()
     try:
@@ -144,7 +150,11 @@ def get_db_download(
     """Like get_db but also accepts ?profile= query param (for browser-navigated downloads)."""
     name = profile if profile else x_profile
     safe = _sanitize_profile_name(name) or "default"
-    engine = get_or_create_engine(safe)
+    try:
+        engine = get_or_create_engine(safe)
+    except FileNotFoundError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=str(exc))
     _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db = _SessionLocal()
     try:

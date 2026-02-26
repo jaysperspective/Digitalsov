@@ -73,6 +73,8 @@ def get_settings(db: Session = Depends(get_db)):
 
 @router.put("/settings", summary="Update LLM settings")
 def update_settings(payload: LLMSettingsUpdate, db: Session = Depends(get_db)):
+    if payload.provider.lower() != "ollama":
+        raise HTTPException(status_code=400, detail="Only local Ollama provider is supported.")
     llm_service.set_setting(db, "llm_provider", payload.provider)
     llm_service.set_setting(db, "llm_model", payload.model)
     llm_service.set_setting(db, "llm_fast_model", payload.fast_model)

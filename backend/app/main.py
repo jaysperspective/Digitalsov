@@ -2,12 +2,13 @@ import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import PROFILES_DIR, init_profile_db
 from .routers import audit, categories, imports, llm, merchants as merchants_router, reports, rules, tags as tags_router, transactions
 from .routers import profiles as profiles_router
+from .security import RequireAPIAuth
 
 
 @asynccontextmanager
@@ -47,6 +48,7 @@ app = FastAPI(
     description="Local-first personal finance audit — CSV import, dedup, categorisation.",
     version="0.2.0",
     lifespan=lifespan,
+    dependencies=[RequireAPIAuth],
 )
 
 app.add_middleware(

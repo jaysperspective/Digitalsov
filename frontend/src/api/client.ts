@@ -45,6 +45,11 @@ export function getActiveProfile(): string {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("X-Profile", getActiveProfile());
+  // Optional bearer token for secured deployments (DIGITALSOV_API_TOKEN).
+  const token = localStorage.getItem("api_token");
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
