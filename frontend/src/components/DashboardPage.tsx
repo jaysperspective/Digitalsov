@@ -726,14 +726,14 @@ export default function DashboardPage({ refreshKey }: { refreshKey: number }) {
                 No expense data
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
+              <ResponsiveContainer width="100%" height={360}>
                 <PieChart>
                   <Pie
                     data={pieData}
                     cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={95}
+                    cy="45%"
+                    innerRadius={70}
+                    outerRadius={120}
                     paddingAngle={2}
                     dataKey="value"
                   >

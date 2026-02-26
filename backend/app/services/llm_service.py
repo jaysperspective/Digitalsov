@@ -17,6 +17,65 @@ DEFAULT_MODEL = "llama3.1:latest"
 DEFAULT_FAST_MODEL = "llama3.2:3b-instruct-q8_0"
 MAX_TOOL_ITERATIONS = 6
 
+# ── DigitalSov app knowledge injected into every chat session ─────────────────
+DIGITALSOV_DOCS = """
+=== About DigitalSov ===
+DigitalSov is a local-first, privacy-first personal finance audit tool. It runs entirely
+on the user's machine — no cloud, no accounts, no telemetry. All data is stored in SQLite
+.db files at profiles/<name>.db. Nothing ever leaves the machine.
+
+=== App Structure (tabs) ===
+- Dashboard: monthly spending charts, candlestick chart, category breakdown, period summaries
+- Import: upload bank statements (CSV, PDF/TXT, PayPal CSV), view import history
+- Transactions: browse/filter all transactions, manage uncategorized items
+- Categories: manage spending categories (name, color, icon, budget, tax-deductible flag)
+- Rules: keyword/regex auto-categorization rules with priority ordering
+- Tax: income vs housing report, tax-year CSV export, audit flags
+- AI: this chat assistant + LLM settings
+- Docs: full documentation and Terms & Conditions
+
+=== Importing Financial Data ===
+Three import methods:
+1. CSV (Import → CSV): generic bank/credit card export. Wizard previews headers, user maps
+   columns (date, description, amount or debit/credit). Auto-deduplicates by date+description+amount.
+2. PDF/TXT Statement (Import → PDF / TXT Statement): extracts tables from PDF statements.
+   Auto-detects columns; manual mapping available for unusual layouts. Scanned PDFs not supported.
+3. PayPal CSV (Import → PayPal CSV): dedicated importer for PayPal's unique export format.
+   No column mapping needed.
+After importing: rules run automatically, uncategorized items appear in Transactions → Uncategorized.
+Import History shows all imports; each can be labeled (account name), annotated, or deleted.
+
+=== Categories & Rules ===
+Categories: user-defined buckets (Income, Housing, Groceries, etc.) with color, icon,
+optional monthly budget, and tax-deductible flag.
+Rules engine: each rule has a pattern (keyword "contains" match or regex), a target category,
+and a priority (higher = matched first). Rules run on every import and when "Apply Rules" is clicked.
+Default rules cover common merchants (Amazon, Starbucks, Uber, etc.). Users add custom rules
+for their own spending patterns.
+
+=== Profile System ===
+Each profile = a separate SQLite file (profiles/<name>.db). Complete data isolation.
+Active profile shown in the header. Switch with the ⇄ button. Create/delete from the
+profile selector screen. Profile names: lowercase letters, digits, hyphens, underscores only.
+On first startup, existing finance.db is migrated to profiles/default.db automatically.
+
+=== Data Security ===
+- No outbound network requests except localhost:8000
+- No accounts, passwords, or authentication
+- Backup = copy profiles/<name>.db
+- Delete = rm profiles/<name>.db
+- AI chat uses Ollama (local inference only — nothing sent to cloud APIs)
+
+=== Key Concepts ===
+- Transactions: date, description, merchant, amount (cents), category, account, note, type
+- Transaction types: debit, credit, transfer (transfers excluded from income/expense summaries)
+- Deduplication: fingerprint = date + description + amount — re-importing same file is safe
+- Tax export: CSV grouped by category for a full calendar year (Tax → Tax Summary → Download)
+- Audit flags: large transactions, uncategorized items, suspected duplicate pairs
+- Transfer detection: matches pairs of transactions (same amount, close dates, different accounts)
+- Net worth report: aggregate balance across all imported accounts over time
+"""
+
 # JSON Schema enforced on the final structured response (no tools in this call)
 RESPONSE_SCHEMA = {
     "type": "object",
@@ -246,8 +305,13 @@ async def chat_stream(
     system_msg = {
         "role": "system",
         "content": (
-            "You are a helpful personal finance assistant with full access to the user's "
-            "complete transaction history through the tools below.\n\n"
+            "You are DigitalSov Assistant — a helpful AI built into the DigitalSov personal "
+            "finance app. You have two areas of expertise:\n\n"
+            "1. THE APP ITSELF: You know exactly how DigitalSov works — how to import data, "
+            "manage categories and rules, use profiles, export tax reports, and everything in "
+            "the Docs tab. Answer app questions directly from your knowledge.\n\n"
+            "2. THE USER'S FINANCES: You have full access to the user's transaction history "
+            "through the tools below. Use tools to look up specific financial data.\n\n"
             "USE TOOLS when you need:\n"
             "  • A specific merchant or keyword  → search_transactions\n"
             "  • Full detail for one month       → get_month_detail\n"
@@ -260,8 +324,9 @@ async def chat_stream(
             "  3. Do not call get_month_detail unless the user explicitly asks about a month overview.\n"
             "  4. Use ONLY data returned by tools — do not use the monthly overview below to fabricate transaction details.\n"
             "  5. Never invent sources. Only cite tool names you actually called.\n"
-            "  6. Always provide 2-3 follow-up questions relevant to what was asked.\n\n"
-            "=== Financial Overview (for context only — use tools for specifics) ===\n"
+            "  6. Always provide 2-3 follow-up questions relevant to what was asked.\n"
+            + DIGITALSOV_DOCS
+            + "\n=== Financial Overview (for context only — use tools for specifics) ===\n"
             + context
         ),
     }

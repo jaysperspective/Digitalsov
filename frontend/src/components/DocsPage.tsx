@@ -233,8 +233,8 @@ function Install() {
       </ul>
 
       <H2>1 — Clone the repository</H2>
-      <Block>{`git clone https://github.com/your-username/digitalsov.git
-cd digitalsov`}</Block>
+      <Block>{`git clone https://github.com/jaysperspective/Digitalsov.git
+cd Digitalsov`}</Block>
 
       <H2>2 — Set up the Python backend</H2>
       <Block>{`cd backend
