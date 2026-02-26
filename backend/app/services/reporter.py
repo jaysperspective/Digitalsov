@@ -7,9 +7,10 @@ from collections import defaultdict
 from datetime import date as _date, timedelta as _timedelta
 from typing import Optional
 
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from ..models import Category, Import, Transaction
+from ..models import Category, Import, Rule, Transaction
 
 def _cents_to_dollars(cents: int) -> float:
     return round(cents / 100, 2)
@@ -23,6 +24,14 @@ def _is_excluded(t: Transaction) -> bool:
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
+
+# Category spike detection
+_SPIKE_MIN_DOLLARS = 100      # flag if absolute delta >= $100
+_SPIKE_MIN_PCT = 0.40         # flag if percent delta >= 40%
+
+# Merchant anomaly detection
+_ANOMALY_MULTIPLIER = 2.5     # flag if > 2.5x merchant/category median
+_ANOMALY_MIN_SAMPLES = 3      # minimum history sample size
 
 BANK_FEE_KEYWORDS = [
     "fee",
@@ -247,6 +256,174 @@ def get_category_breakdown(db: Session, from_month: str, to_month: str) -> dict:
 # ── Audit flags ───────────────────────────────────────────────────────────────
 
 
+def _detect_category_spikes(
+    period_txns: list,
+    all_txns: list,
+    from_str: Optional[str],
+    to_str: Optional[str],
+) -> list[dict]:
+    """Flag categories that spiked vs prior period of the same length."""
+    if not from_str or not to_str:
+        return []
+
+    try:
+        from_date = _date.fromisoformat(from_str)
+        to_date = _date.fromisoformat(to_str)
+    except ValueError:
+        return []
+
+    period_len = (to_date - from_date).days + 1
+    prior_to = from_date - _timedelta(days=1)
+    prior_from = prior_to - _timedelta(days=period_len - 1)
+    prior_from_str = prior_from.isoformat()
+    prior_to_str = prior_to.isoformat()
+
+    # Accumulate expense totals per category for current and prior periods
+    current_cat: dict[Optional[int], int] = defaultdict(int)
+    prior_cat: dict[Optional[int], int] = defaultdict(int)
+
+    for t in period_txns:
+        if t.amount_cents < 0 and not _is_excluded(t):
+            current_cat[t.category_id] += abs(t.amount_cents)
+
+    for t in all_txns:
+        if (
+            t.amount_cents < 0
+            and not _is_excluded(t)
+            and t.posted_date >= prior_from_str
+            and t.posted_date <= prior_to_str
+        ):
+            prior_cat[t.category_id] += abs(t.amount_cents)
+
+    flags: list[dict] = []
+
+    for cat_id, current_cents in current_cat.items():
+        prior_cents = prior_cat.get(cat_id, 0)
+        if prior_cents == 0:
+            continue  # no prior history to compare
+
+        delta_cents = current_cents - prior_cents
+        delta_dollars = delta_cents / 100
+        delta_pct = delta_cents / prior_cents
+
+        if delta_dollars < _SPIKE_MIN_DOLLARS and delta_pct < _SPIKE_MIN_PCT:
+            continue
+
+        # Find representative transaction (largest expense in category this period)
+        cat_txns = [
+            t for t in period_txns
+            if t.category_id == cat_id and t.amount_cents < 0 and not _is_excluded(t)
+        ]
+        if not cat_txns:
+            continue
+        rep_tx = max(cat_txns, key=lambda t: abs(t.amount_cents))
+
+        # Top 3 merchants driving the delta
+        merch_totals: dict[str, int] = defaultdict(int)
+        for t in cat_txns:
+            key = (t.merchant_canonical or t.merchant or "Unknown").strip()
+            merch_totals[key] += abs(t.amount_cents)
+        top_merchants = sorted(merch_totals.items(), key=lambda x: x[1], reverse=True)[:3]
+
+        cat = rep_tx.category
+        flags.append({
+            "flag_type": "category-spike",
+            "severity": "warning",
+            "explanation": (
+                f"Category '{cat.name if cat else 'Unknown'}' spending "
+                f"${current_cents / 100:.0f} vs ${prior_cents / 100:.0f} prior period "
+                f"(+{delta_pct * 100:.0f}%)"
+            ),
+            "transaction": _tx_dict(rep_tx),
+            "extra": {
+                "category_id": cat_id,
+                "category_name": cat.name if cat else None,
+                "period_total": current_cents / 100,
+                "prior_total": prior_cents / 100,
+                "delta_pct": round(delta_pct, 4),
+                "top_merchants": [{"merchant": m, "total": c / 100} for m, c in top_merchants],
+            },
+        })
+
+    return flags
+
+
+def _detect_merchant_anomalies(
+    period_txns: list,
+    all_txns: list,
+    from_str: Optional[str],
+) -> list[dict]:
+    """Flag expense transactions that are anomalously large vs merchant/category history."""
+    if not from_str:
+        return []
+
+    # Build merchant and category baselines from history BEFORE the period
+    merch_hist: dict[str, list[int]] = defaultdict(list)
+    cat_hist: dict[Optional[int], list[int]] = defaultdict(list)
+
+    for t in all_txns:
+        if t.amount_cents >= 0 or _is_excluded(t):
+            continue
+        if t.posted_date >= from_str:
+            continue
+        merch_key = (t.merchant_canonical or t.merchant or "").lower().strip()
+        if merch_key:
+            merch_hist[merch_key].append(abs(t.amount_cents))
+        cat_hist[t.category_id].append(abs(t.amount_cents))
+
+    flags: list[dict] = []
+
+    for t in period_txns:
+        if t.amount_cents >= 0 or _is_excluded(t):
+            continue
+
+        amt_cents = abs(t.amount_cents)
+        merch_key = (t.merchant_canonical or t.merchant or "").lower().strip()
+
+        baseline: Optional[float] = None
+        sample_count = 0
+        source = "merchant"
+
+        # Try merchant history first
+        hist = merch_hist.get(merch_key, [])
+        if len(hist) >= _ANOMALY_MIN_SAMPLES:
+            baseline = statistics.median(hist)
+            sample_count = len(hist)
+            source = "merchant"
+        else:
+            # Fallback to category history
+            cat_hist_list = cat_hist.get(t.category_id, [])
+            if len(cat_hist_list) >= _ANOMALY_MIN_SAMPLES:
+                baseline = statistics.median(cat_hist_list)
+                sample_count = len(cat_hist_list)
+                source = "category"
+
+        if baseline is None or baseline == 0:
+            continue
+
+        ratio = amt_cents / baseline
+        if ratio <= _ANOMALY_MULTIPLIER:
+            continue
+
+        flags.append({
+            "flag_type": "merchant-anomaly",
+            "severity": "warning",
+            "explanation": (
+                f"${amt_cents / 100:.2f} is {ratio:.1f}× the {source} median "
+                f"(${baseline / 100:.2f}, n={sample_count})"
+            ),
+            "transaction": _tx_dict(t),
+            "extra": {
+                "baseline_median": round(baseline / 100, 2),
+                "sample_count": sample_count,
+                "ratio": round(ratio, 2),
+                "source": source,
+            },
+        })
+
+    return flags
+
+
 def get_audit_flags(
     db: Session,
     from_date: Optional[str],
@@ -363,6 +540,12 @@ def get_audit_flags(
             ),
             "transaction": _tx_dict(first_tx),
         })
+
+    # ── 5. Category spikes ───────────────────────────────────────────────────
+    flags.extend(_detect_category_spikes(period_txns, all_txns, from_str, to_str))
+
+    # ── 6. Merchant anomalies ────────────────────────────────────────────────
+    flags.extend(_detect_merchant_anomalies(period_txns, all_txns, from_str))
 
     # Most-recent first, then by flag type for stable ordering
     flags.sort(
@@ -662,3 +845,117 @@ def get_candlestick_data(
         })
 
     return candles
+
+
+# ── Data Health ────────────────────────────────────────────────────────────────
+
+
+def get_data_health(db: Session) -> dict:
+    """Return data quality metrics and recommendations."""
+    from ..services.transfer_detector import find_transfer_candidates
+
+    # 1. Uncategorized transactions
+    uncategorized = (
+        db.query(func.count())
+        .select_from(Transaction)
+        .filter(Transaction.category_id.is_(None))
+        .scalar()
+        or 0
+    )
+
+    # 2. Imports missing account label
+    missing_label = (
+        db.query(func.count())
+        .select_from(Import)
+        .filter(or_(Import.account_label.is_(None), Import.account_label == ""))
+        .scalar()
+        or 0
+    )
+
+    # 3. Merchants without canonical
+    uncanon = (
+        db.query(func.count())
+        .select_from(Transaction)
+        .filter(
+            Transaction.merchant.isnot(None),
+            Transaction.merchant_canonical.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+
+    # 4. Possible duplicate groups (groups with >1 same date+amount+merchant)
+    dup_subq = (
+        db.query(func.count().label("cnt"))
+        .select_from(Transaction)
+        .group_by(
+            Transaction.posted_date,
+            Transaction.amount_cents,
+            func.lower(Transaction.merchant),
+        )
+        .having(func.count() > 1)
+        .subquery()
+    )
+    possible_dups = db.query(func.count()).select_from(dup_subq).scalar() or 0
+
+    # 5. Transfer candidates
+    try:
+        transfer_candidates_count = len(find_transfer_candidates(db))
+    except Exception:
+        transfer_candidates_count = 0
+
+    # 6. Active rules
+    active_rules = (
+        db.query(func.count())
+        .select_from(Rule)
+        .filter(Rule.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+
+    # 7. Last import date
+    last_imp = db.query(Import.created_at).order_by(Import.created_at.desc()).first()
+    last_import_date = last_imp[0].isoformat() if last_imp else None
+
+    # 8. Total transactions
+    total_txns = db.query(func.count()).select_from(Transaction).scalar() or 0
+
+    # 9. Top problem merchants (most transactions without canonical)
+    top_merchants_q = (
+        db.query(Transaction.merchant, func.count().label("cnt"))
+        .filter(
+            Transaction.merchant.isnot(None),
+            Transaction.merchant_canonical.is_(None),
+        )
+        .group_by(Transaction.merchant)
+        .order_by(func.count().desc())
+        .limit(5)
+        .all()
+    )
+    top_problem_merchants = [{"merchant": r.merchant, "count": r.cnt} for r in top_merchants_q]
+
+    # 10. Recommendations
+    recs: list[str] = []
+    if uncategorized > 0:
+        recs.append(f"Categorize {uncategorized} uncategorized transaction{'s' if uncategorized != 1 else ''}")
+    if uncanon > 0:
+        recs.append(f"Add merchant aliases for {uncanon} unmapped merchant{'s' if uncanon != 1 else ''}")
+    if missing_label > 0:
+        recs.append(f"Label {missing_label} import{'s' if missing_label != 1 else ''} with account names")
+    if transfer_candidates_count > 0:
+        recs.append(f"Review {transfer_candidates_count} transfer candidate{'s' if transfer_candidates_count != 1 else ''}")
+    if possible_dups > 0:
+        recs.append(f"Check {possible_dups} possible duplicate group{'s' if possible_dups != 1 else ''}")
+
+    return {
+        "uncategorized_count": uncategorized,
+        "imports_missing_account_label_count": missing_label,
+        "merchants_uncanonicalized_count": uncanon,
+        "possible_duplicates_count": possible_dups,
+        "transfer_candidates_count": transfer_candidates_count,
+        "active_rules_count": active_rules,
+        "last_import_date": last_import_date,
+        "total_transactions": total_txns,
+        "top_problem_merchants": top_problem_merchants,
+        "recommendations": recs,
+    }

@@ -67,7 +67,7 @@ def apply_rules_to_all(db: Session) -> dict:
 
     for tx in transactions:
         new_cat, new_rule_id = categorize(tx.description_norm, rules)
-        new_source = "rule" if new_cat is not None else None
+        new_source = "rule" if new_cat is not None else "uncategorized"
         if tx.category_id != new_cat or tx.category_rule_id != new_rule_id:
             tx.category_id = new_cat
             tx.category_source = new_source
@@ -102,7 +102,7 @@ def auto_categorize_import(db: Session, import_id: int) -> None:
     changed = False
     for tx in transactions:
         cat_id, rule_id = categorize(tx.description_norm, rules)
-        new_source = "rule" if cat_id is not None else None
+        new_source = "rule" if cat_id is not None else "uncategorized"
         if tx.category_id != cat_id or tx.category_rule_id != rule_id:
             tx.category_id = cat_id
             tx.category_source = new_source

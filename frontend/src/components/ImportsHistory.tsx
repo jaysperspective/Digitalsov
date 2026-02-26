@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { deleteImport, listImports, patchImportLabel } from "../api/client";
+import { useFinance } from "../context/FinanceContext";
 import type { ImportRecord } from "../types";
 
 const ACCOUNT_TYPES = [
@@ -252,7 +253,8 @@ const ALL_TYPES = [
   { value: "__none__", label: "Untagged" },
 ];
 
-export default function ImportsHistory({ refreshKey }: { refreshKey: number }) {
+export default function ImportsHistory() {
+  const { refreshKey } = useFinance();
   const [records, setRecords] = useState<ImportRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

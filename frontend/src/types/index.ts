@@ -1,3 +1,22 @@
+// ── Tags ──────────────────────────────────────────────────────────────────────
+
+export interface Tag {
+  id: number;
+  name: string;
+  color: string | null;
+  created_at: string;
+}
+
+export interface TagCreate {
+  name: string;
+  color?: string | null;
+}
+
+export interface TagUpdate {
+  name?: string;
+  color?: string | null;
+}
+
 export interface Transaction {
   id: number;
   import_id: number;
@@ -8,6 +27,7 @@ export interface Transaction {
   amount_cents: number;
   currency: string;
   merchant: string | null;
+  merchant_canonical: string | null;
   category_id: number | null;
   category_name: string | null;
   category_color: string | null;
@@ -21,6 +41,7 @@ export interface Transaction {
   category_rule_match_type: string | null;
   category_rule_priority: number | null;
   created_at: string;
+  tags: Tag[];
 }
 
 export interface ImportResult {
@@ -211,7 +232,13 @@ export interface PeriodSummary {
   by_day: DayTotal[];
 }
 
-export type FlagType = "duplicate-like" | "bank-fee" | "unusually-large" | "new-merchant";
+export type FlagType =
+  | "duplicate-like"
+  | "bank-fee"
+  | "unusually-large"
+  | "new-merchant"
+  | "category-spike"
+  | "merchant-anomaly";
 export type Severity = "warning" | "info";
 
 export interface AuditFlagTransaction {
@@ -233,6 +260,7 @@ export interface AuditFlag {
   severity: Severity;
   explanation: string;
   transaction: AuditFlagTransaction;
+  extra?: Record<string, unknown>;
 }
 
 // ── Transfer detection ─────────────────────────────────────────────────────────
@@ -274,10 +302,32 @@ export interface LLMSettings {
   use_fast_mode: boolean;
 }
 
+export interface EvidenceFilters {
+  from?: string;
+  to?: string;
+  category_id?: number;
+  merchant?: string;
+  transaction_id?: number;
+  import_id?: number;
+  uncategorized?: boolean;
+  min_amount_cents?: number;
+  max_amount_cents?: number;
+}
+
+export interface TransactionFilters {
+  from_date?: string | null;
+  to_date?: string | null;
+  category_id?: number | null;
+  merchant_search?: string | null;
+  import_id?: number | null;
+  uncategorized?: boolean;
+}
+
 export interface FactUsed {
   label: string;
   value: string;
   source: string;
+  filters?: EvidenceFilters;
 }
 
 export interface ChatMessage {
@@ -386,6 +436,36 @@ export interface NetWorthReport {
   accounts: NetWorthAccount[];
 }
 
+// ── Merchant Aliases ──────────────────────────────────────────────────────────
+
+export interface MerchantAlias {
+  id: number;
+  alias: string;
+  canonical: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MerchantAliasCreate {
+  alias: string;
+  canonical: string;
+}
+
+// ── Data Health ────────────────────────────────────────────────────────────────
+
+export interface DataHealthReport {
+  uncategorized_count: number;
+  imports_missing_account_label_count: number;
+  merchants_uncanonicalized_count: number;
+  possible_duplicates_count: number;
+  transfer_candidates_count: number;
+  active_rules_count: number;
+  last_import_date: string | null;
+  total_transactions: number;
+  top_problem_merchants: { merchant: string; count: number }[];
+  recommendations: string[];
+}
+
 // ── SSE event types from /api/llm/chat/stream ─────────────────────────────────
 
 export interface SSEThinkingEvent {
@@ -425,3 +505,102 @@ export type ChatSSEEvent =
   | SSEAnswerEvent
   | SSEErrorEvent
   | SSEDoneEvent;
+
+// ── Period Comparison ─────────────────────────────────────────────────────────
+
+export interface ComparisonTotals {
+  incomeA: number;
+  expenseA: number;
+  netA: number;
+  txCountA: number;
+  incomeB: number;
+  expenseB: number;
+  netB: number;
+  txCountB: number;
+  incomeDelta: number;
+  expenseDelta: number;
+  netDelta: number;
+  txCountDelta: number;
+}
+
+export interface CategoryDelta {
+  category_id: number | null;
+  category_name: string | null;
+  a_total: number;
+  b_total: number;
+  delta: number;
+  pct_change: number | null;
+  a_count: number;
+  b_count: number;
+}
+
+export interface MerchantDelta {
+  merchant: string;
+  a_total: number;
+  b_total: number;
+  delta: number;
+  pct_change: number | null;
+  a_count: number;
+  b_count: number;
+}
+
+export interface RecurringItem {
+  merchant: string;
+  amount: number;
+  cadence: string | null;
+}
+
+export interface RecurringChanged {
+  merchant: string;
+  amountA: number;
+  amountB: number;
+  delta: number;
+  cadence: string | null;
+}
+
+export interface PeriodComparison {
+  periodA: { from: string; to: string };
+  periodB: { from: string; to: string };
+  totals: ComparisonTotals;
+  categoryDeltas: CategoryDelta[];
+  merchantDeltas: MerchantDelta[];
+  recurringChanges: {
+    new: RecurringItem[];
+    stopped: RecurringItem[];
+    changed: RecurringChanged[];
+  };
+  notes: string[];
+}
+
+// ── Rule Suggestions ──────────────────────────────────────────────────────────
+
+export interface RuleSuggestion {
+  merchant: string;
+  match_type: MatchType;
+  pattern: string;
+  category_id: number | null;
+  category_name: string | null;
+  count: number;
+  total_spend: number;
+  avg_spend: number;
+  confidence: number;
+  source: "uncategorized_volume" | "manual_consistency";
+  sample_descriptions: string[];
+}
+
+export interface RuleSuggestionsResponse {
+  suggestions: RuleSuggestion[];
+}
+
+export interface ApplySuggestionRequest {
+  merchant: string;
+  match_type: MatchType;
+  pattern: string;
+  category_id: number;
+  priority?: number;
+}
+
+export interface ApplySuggestionResponse {
+  created_rule_id: number;
+  updated_transactions_count: number;
+}

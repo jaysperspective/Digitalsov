@@ -1,8 +1,12 @@
 """Database seeder — idempotent default categories and rules."""
 
+import calendar
+import hashlib
+from datetime import date
+
 from sqlalchemy.orm import Session
 
-from ..models import Category, Rule, Transaction
+from ..models import Category, Import, Rule, Transaction
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Default categories
@@ -321,4 +325,305 @@ def seed_rules(db: Session) -> None:
                 is_active=True,
             )
         )
+    db.commit()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Demo profile seeder  (fictional data — no relation to any real user)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def seed_demo_transactions(db: Session) -> None:
+    """Populate the 'sample' profile with realistic fictional transactions.
+
+    Idempotent — does nothing if any transactions already exist.
+    All data (names, amounts, merchants) is entirely made up.
+    Dates are shifted to the 3 months leading up to the current month so
+    the dashboard always shows recent data rather than hardcoded Q4 2024.
+    """
+    if db.query(Transaction).count() > 0:
+        return
+
+    # ── Rolling date helpers ──────────────────────────────────────────────────
+    def _months_ago(n: int) -> tuple[int, int]:
+        today = date.today()
+        year, month = today.year, today.month
+        month -= n
+        while month <= 0:
+            month += 12
+            year -= 1
+        return year, month
+
+    # Map the 3 source months (Oct→Nov→Dec 2024) to rolling recent months.
+    # "current month" is _months_ago(0); 1-3 months back fill the prior months.
+    _SRC = {
+        "2024-10": _months_ago(2),
+        "2024-11": _months_ago(1),
+        "2024-12": _months_ago(0),
+    }
+
+    def shift_date(dt: str) -> str:
+        """Shift a hardcoded 2024 date string to its rolling equivalent."""
+        src_prefix = dt[:7]
+        if src_prefix not in _SRC:
+            return dt
+        year, month = _SRC[src_prefix]
+        day = int(dt[8:10])
+        max_day = calendar.monthrange(year, month)[1]
+        day = min(day, max_day)
+        return f"{year}-{month:02d}-{day:02d}"
+
+    cat_map: dict[str, int] = {c.name: c.id for c in db.query(Category).all()}
+
+    def _fp(dt: str, desc: str, cents: int) -> str:
+        """Compute deterministic fingerprint identical to normalizer.compute_fingerprint."""
+        canonical = f"{dt}|{desc.strip()}|{cents / 100:.4f}"
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def _imp_hash(key: str) -> str:
+        return hashlib.sha256(f"digitalsov-demo-v1-{key}".encode()).hexdigest()
+
+    # ── Two fictional account imports ─────────────────────────────────────────
+    imp_chk = Import(
+        filename="sample_riverdale_checking.csv",
+        file_hash=_imp_hash("riverdale-checking-4521"),
+        source_type="generic",
+        account_label="Riverdale Bank Checking ••4521",
+        account_type="checking",
+        notes="Demo profile — all data is fictional",
+    )
+    imp_cc = Import(
+        filename="sample_apex_card.csv",
+        file_hash=_imp_hash("apex-card-8834"),
+        source_type="generic",
+        account_label="Apex Rewards Card ••8834",
+        account_type="credit",
+        notes="Demo profile — all data is fictional",
+    )
+    db.add_all([imp_chk, imp_cc])
+    db.flush()  # materialise IDs before linking transactions
+
+    # Category shorthand
+    INC = "Income"
+    HSG = "Housing"
+    SUB = "Subscriptions"
+    GRC = "Groceries"
+    DIN = "Dining & Restaurants"
+    TRP = "Transportation"
+    SHP = "Shopping"
+    UTL = "Utilities"
+    HLT = "Healthcare"
+    ENT = "Entertainment"
+    FIN = "Finance & Banking"
+
+    def t(
+        dt: str,
+        desc: str,
+        merchant: str,
+        cents: int,
+        imp: Import,
+        cat: str | None = None,
+        tx_type: str = "debit",
+        note: str | None = None,
+    ) -> Transaction:
+        dt = shift_date(dt)  # shift hardcoded 2024 dates to rolling recent months
+        cat_id = cat_map.get(cat) if cat else None
+        return Transaction(
+            import_id=imp.id,
+            posted_date=dt,
+            description_raw=desc,
+            description_norm=desc.lower(),
+            merchant=merchant,
+            merchant_canonical=merchant,
+            amount_cents=cents,
+            transaction_type=tx_type,
+            category_id=cat_id,
+            category_source="manual" if cat_id else "uncategorized",
+            fingerprint_hash=_fp(dt, desc, cents),
+            note=note,
+        )
+
+    CHK = imp_chk
+    CC  = imp_cc
+
+    txns = [
+        # ── OCTOBER 2024 ──────────────────────────────────────────────────────
+        # Housing
+        t("2024-10-01", "MAPLEWOOD APARTMENTS OCT RENT",  "Maplewood Apartments", -185000, CHK, HSG),
+        # Income — bi-weekly payroll from fictional employer
+        t("2024-10-04", "MERIDIAN TECH PAYROLL DIR DEP",  "Meridian Tech",         418750, CHK, INC, "credit"),
+        # Groceries
+        t("2024-10-05", "WHOLE FOODS MKT #0423",          "Whole Foods",            -9247, CC,  GRC),
+        # Dining
+        t("2024-10-07", "STARBUCKS #09421",               "Starbucks",               -735, CC,  DIN),
+        # Uncategorized — gym (no default rule)
+        t("2024-10-08", "PEAK FITNESS 0042",              "Peak Fitness",           -2499, CHK),
+        # Subscriptions
+        t("2024-10-09", "NETFLIX.COM",                    "Netflix",                -1599, CC,  SUB),
+        # Transportation
+        t("2024-10-10", "LYFT *RIDE 10/10",               "Lyft",                   -1480, CC,  TRP),
+        # Dining
+        t("2024-10-11", "CHIPOTLE ONLINE #441",           "Chipotle",               -1625, CC,  DIN),
+        # Shopping
+        t("2024-10-12", "AMAZON.COM AMZN.COM",            "Amazon",                 -8999, CC,  SHP),
+        # Groceries
+        t("2024-10-14", "TRADER JOE'S #145",              "Trader Joe's",            -6347, CC,  GRC),
+        # Subscriptions
+        t("2024-10-15", "SPOTIFY USA",                    "Spotify",                -1099, CC,  SUB),
+        # Utilities
+        t("2024-10-16", "HARBOR ELECTRIC UTILITY",        "Harbor Electric",        -9422, CHK, UTL),
+        # Dining
+        t("2024-10-17", "STARBUCKS #09421",               "Starbucks",               -685, CC,  DIN),
+        # Income
+        t("2024-10-18", "MERIDIAN TECH PAYROLL DIR DEP",  "Meridian Tech",         418750, CHK, INC, "credit"),
+        # Dining
+        t("2024-10-19", "DOORDASH*DELIVERY",              "DoorDash",               -3875, CC,  DIN),
+        # Uncategorized — gas station (no default rule for "coastal fuel")
+        t("2024-10-20", "COASTAL FUEL #3847",             "Coastal Fuel",           -6245, CHK),
+        # Shopping
+        t("2024-10-21", "TARGET #1832",                   "Target",                 -6730, CC,  SHP),
+        # Subscriptions
+        t("2024-10-22", "AMAZON PRIME MEMBERSHIP",        "Amazon Prime",           -1499, CC,  SUB),
+        # Utilities
+        t("2024-10-23", "BROADWAVE INTERNET",             "Broadwave Internet",     -8999, CHK, UTL),
+        # Healthcare
+        t("2024-10-24", "WALGREENS #4821",                "Walgreens",              -2347, CC,  HLT),
+        # Transportation
+        t("2024-10-25", "BART CLIPPER",                   "BART",                    -650, CHK, TRP),
+        # Entertainment
+        t("2024-10-26", "AMC THEATRES #0321",             "AMC Theatre",            -2450, CC,  ENT),
+        # Finance
+        t("2024-10-27", "VENMO PAYMENT",                  "Venmo",                  -4000, CHK, FIN),
+        # Dining
+        t("2024-10-28", "STARBUCKS #09421",               "Starbucks",               -815, CC,  DIN),
+        # Groceries
+        t("2024-10-29", "WHOLE FOODS MKT #0423",          "Whole Foods",           -11863, CC,  GRC),
+        # Utilities
+        t("2024-10-30", "NOVA WIRELESS",                  "Nova Wireless",           -7200, CHK, UTL),
+        # Transfer to savings
+        t("2024-10-31", "ONLINE BANKING TRANSFER SAVINGS","Savings Transfer",      -50000, CHK, None, "transfer", "Monthly savings deposit"),
+
+        # ── NOVEMBER 2024 ─────────────────────────────────────────────────────
+        # Housing
+        t("2024-11-01", "MAPLEWOOD APARTMENTS NOV RENT",  "Maplewood Apartments", -185000, CHK, HSG),
+        # Income
+        t("2024-11-01", "MERIDIAN TECH PAYROLL DIR DEP",  "Meridian Tech",         418750, CHK, INC, "credit"),
+        # Groceries
+        t("2024-11-02", "TRADER JOE'S #145",              "Trader Joe's",            -7592, CC,  GRC),
+        # Uncategorized — video conferencing subscription (no default rule)
+        t("2024-11-03", "ZOOM.US SUBSCRIPTION",           "Zoom Video",             -1599, CC),
+        # Transportation
+        t("2024-11-04", "LYFT *RIDE 11/04",               "Lyft",                   -2230, CC,  TRP),
+        # Dining
+        t("2024-11-05", "CHIPOTLE ONLINE #441",           "Chipotle",               -1495, CC,  DIN),
+        # Shopping
+        t("2024-11-06", "TARGET #1832",                   "Target",                -13477, CC,  SHP),
+        # Healthcare
+        t("2024-11-07", "CVS PHARMACY #4821",             "CVS",                    -3489, CC,  HLT),
+        # Dining
+        t("2024-11-08", "STARBUCKS #09421",               "Starbucks",               -765, CC,  DIN),
+        # Subscriptions
+        t("2024-11-09", "NETFLIX.COM",                    "Netflix",                -1599, CC,  SUB),
+        # Shopping
+        t("2024-11-10", "AMAZON.COM AMZN.COM",            "Amazon",                -15640, CC,  SHP),
+        # Transportation
+        t("2024-11-11", "BART CLIPPER",                   "BART",                    -975, CHK, TRP),
+        # Dining
+        t("2024-11-12", "UBER EATS",                      "Uber Eats",              -4265, CC,  DIN),
+        # Uncategorized — gas station
+        t("2024-11-13", "COASTAL FUEL #3847",             "Coastal Fuel",           -5890, CHK),
+        # Entertainment
+        t("2024-11-14", "TICKETMASTER",                   "Ticketmaster",          -12750, CC,  ENT),
+        # Income
+        t("2024-11-15", "MERIDIAN TECH PAYROLL DIR DEP",  "Meridian Tech",         418750, CHK, INC, "credit"),
+        # Subscriptions
+        t("2024-11-15", "SPOTIFY USA",                    "Spotify",                -1099, CC,  SUB),
+        # Utilities
+        t("2024-11-16", "HARBOR ELECTRIC UTILITY",        "Harbor Electric",       -10844, CHK, UTL),
+        # Groceries
+        t("2024-11-17", "WHOLE FOODS MKT #0423",          "Whole Foods",            -8723, CC,  GRC),
+        # Uncategorized — AI subscription (no default rule)
+        t("2024-11-18", "OPENAI PLUS SUBSCRIPTION",       "OpenAI",                 -2000, CC),
+        # Dining
+        t("2024-11-19", "STARBUCKS #09421",               "Starbucks",               -645, CC,  DIN),
+        # Groceries (bulk run)
+        t("2024-11-20", "COSTCO WHOLESALE #0042",         "Costco",                -21357, CHK, GRC),
+        # Subscriptions
+        t("2024-11-22", "AMAZON PRIME MEMBERSHIP",        "Amazon Prime",           -1499, CC,  SUB),
+        # Utilities
+        t("2024-11-23", "BROADWAVE INTERNET",             "Broadwave Internet",     -8999, CHK, UTL),
+        # Dining
+        t("2024-11-24", "CHIPOTLE ONLINE #441",           "Chipotle",               -1735, CC,  DIN),
+        # Finance
+        t("2024-11-25", "ATM WITHDRAWAL",                 "ATM Withdrawal",        -20000, CHK, FIN),
+        # Groceries
+        t("2024-11-26", "WHOLE FOODS MKT #0423",          "Whole Foods",            -9682, CC,  GRC),
+        # Uncategorized — local restaurant (no default rule)
+        t("2024-11-27", "BRAVOS PIZZA & PASTA",           "Bravos Pizza",           -2850, CC),
+        # Income
+        t("2024-11-29", "MERIDIAN TECH PAYROLL DIR DEP",  "Meridian Tech",         418750, CHK, INC, "credit"),
+        # Utilities
+        t("2024-11-30", "NOVA WIRELESS",                  "Nova Wireless",           -7200, CHK, UTL),
+        # Transfer to savings
+        t("2024-11-30", "ONLINE BANKING TRANSFER SAVINGS","Savings Transfer",      -50000, CHK, None, "transfer", "Monthly savings deposit"),
+
+        # ── DECEMBER 2024 ─────────────────────────────────────────────────────
+        # Housing
+        t("2024-12-01", "MAPLEWOOD APARTMENTS DEC RENT",  "Maplewood Apartments", -185000, CHK, HSG),
+        # Groceries
+        t("2024-12-03", "TRADER JOE'S #145",              "Trader Joe's",            -8844, CC,  GRC),
+        # Transportation
+        t("2024-12-04", "LYFT *RIDE 12/04",               "Lyft",                   -1890, CC,  TRP),
+        # Dining
+        t("2024-12-05", "STARBUCKS #09421",               "Starbucks",               -925, CC,  DIN),
+        # Shopping
+        t("2024-12-07", "TARGET #1832",                   "Target",                 -9855, CC,  SHP),
+        # Uncategorized — gym
+        t("2024-12-08", "PEAK FITNESS 0042",              "Peak Fitness",           -2499, CHK),
+        # Subscriptions
+        t("2024-12-09", "NETFLIX.COM",                    "Netflix",                -1599, CC,  SUB),
+        # Healthcare
+        t("2024-12-10", "CVS PHARMACY #4821",             "CVS",                    -2815, CC,  HLT),
+        # Shopping — holiday gifts
+        t("2024-12-11", "AMAZON.COM AMZN.COM",            "Amazon",                -24578, CC,  SHP, note="Holiday gifts"),
+        # Dining
+        t("2024-12-12", "DOORDASH*DELIVERY",              "DoorDash",               -4730, CC,  DIN),
+        # Income
+        t("2024-12-13", "MERIDIAN TECH PAYROLL DIR DEP",  "Meridian Tech",         418750, CHK, INC, "credit"),
+        # Uncategorized — gas station
+        t("2024-12-14", "COASTAL FUEL #3847",             "Coastal Fuel",           -6825, CHK),
+        # Subscriptions
+        t("2024-12-15", "SPOTIFY USA",                    "Spotify",                -1099, CC,  SUB),
+        # Dining
+        t("2024-12-16", "UBER EATS",                      "Uber Eats",              -3580, CC,  DIN),
+        # Groceries — holiday grocery haul
+        t("2024-12-17", "WHOLE FOODS MKT #0423",          "Whole Foods",           -14392, CC,  GRC, note="Holiday groceries"),
+        # Utilities — higher winter bill
+        t("2024-12-18", "HARBOR ELECTRIC UTILITY",        "Harbor Electric",       -12735, CHK, UTL),
+        # Healthcare
+        t("2024-12-19", "WALGREENS #4821",                "Walgreens",              -3150, CC,  HLT),
+        # Shopping — more holiday gifts
+        t("2024-12-20", "AMAZON.COM AMZN.COM",            "Amazon",                -17830, CC,  SHP, note="Holiday gifts"),
+        # Dining
+        t("2024-12-21", "STARBUCKS #09421",               "Starbucks",               -890, CC,  DIN),
+        # Subscriptions
+        t("2024-12-22", "AMAZON PRIME MEMBERSHIP",        "Amazon Prime",           -1499, CC,  SUB),
+        # Utilities
+        t("2024-12-23", "BROADWAVE INTERNET",             "Broadwave Internet",     -8999, CHK, UTL),
+        # Dining
+        t("2024-12-24", "CHIPOTLE ONLINE #441",           "Chipotle",               -1945, CC,  DIN),
+        # Uncategorized — farmers market
+        t("2024-12-26", "EASTSIDE FARMERS MARKET",        "Eastside Farmers Market",-3500, CHK),
+        # Income
+        t("2024-12-27", "MERIDIAN TECH PAYROLL DIR DEP",  "Meridian Tech",         418750, CHK, INC, "credit"),
+        # Entertainment
+        t("2024-12-28", "AMC THEATRES #0321",             "AMC Theatre",            -3150, CC,  ENT),
+        # Groceries
+        t("2024-12-29", "TRADER JOE'S #145",              "Trader Joe's",            -7255, CC,  GRC),
+        # Utilities
+        t("2024-12-30", "NOVA WIRELESS",                  "Nova Wireless",           -7200, CHK, UTL),
+        # Transfer to savings
+        t("2024-12-31", "ONLINE BANKING TRANSFER SAVINGS","Savings Transfer",      -50000, CHK, None, "transfer", "Monthly savings deposit"),
+    ]
+
+    db.add_all(txns)
     db.commit()

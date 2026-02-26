@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { confirmTransfer, getAuditFlags, getTransferCandidates } from "../api/client";
-import type { AuditFlag, AuditFlagTransaction, FlagType, Severity, TransferCandidate, TransferTxInfo } from "../types";
+import { useFinance } from "../context/FinanceContext";
+import type { AuditFlag, AuditFlagTransaction, FlagType, Severity, TransactionFilters, TransferCandidate, TransferTxInfo } from "../types";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,16 @@ const FLAG_META: Record<FlagType, { label: string; description: string; icon: st
     label: "New Merchant",
     description: "First transaction ever seen from this merchant",
     icon: "🆕",
+  },
+  "category-spike": {
+    label: "Category Spike",
+    description: "Category spending increased significantly vs prior period",
+    icon: "📈",
+  },
+  "merchant-anomaly": {
+    label: "Merchant Anomaly",
+    description: "Transaction unusually large vs merchant's historical baseline",
+    icon: "⚠️",
   },
 };
 
@@ -58,9 +69,15 @@ function fmtUSD(n: number): string {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
+function flagSeverity(type: FlagType): Severity {
+  return type === "duplicate-like" || type === "unusually-large" || type === "category-spike" || type === "merchant-anomaly"
+    ? "warning"
+    : "info";
+}
+
 function FlagBadge({ type }: { type: FlagType }) {
   const meta = FLAG_META[type];
-  const sev: Severity = type === "duplicate-like" || type === "unusually-large" ? "warning" : "info";
+  const sev: Severity = flagSeverity(type);
   const colors = SEVERITY_COLORS[sev];
   return (
     <span
@@ -141,7 +158,45 @@ function TxRow({ tx }: { tx: AuditFlagTransaction }) {
   );
 }
 
-function FlagCard({ flag, onDismiss }: { flag: AuditFlag; onDismiss: () => void }) {
+function buildViewFilters(flag: AuditFlag, fromDate: string, toDate: string): TransactionFilters {
+  const extra = flag.extra ?? {};
+  if (flag.flag_type === "category-spike") {
+    return {
+      category_id: (extra.category_id as number | null) ?? null,
+      from_date: fromDate,
+      to_date: toDate,
+    };
+  }
+  if (flag.flag_type === "merchant-anomaly") {
+    return {
+      merchant_search: flag.transaction.merchant ?? undefined,
+      from_date: fromDate,
+      to_date: toDate,
+    };
+  }
+  if (flag.flag_type === "duplicate-like") {
+    return {
+      from_date: flag.transaction.posted_date,
+      to_date: flag.transaction.posted_date,
+    };
+  }
+  // unusually-large, etc.
+  return {
+    category_id: flag.transaction.category_id ?? null,
+    from_date: fromDate,
+    to_date: toDate,
+  };
+}
+
+function FlagCard({
+  flag,
+  onDismiss,
+  onView,
+}: {
+  flag: AuditFlag;
+  onDismiss: () => void;
+  onView?: () => void;
+}) {
   const sev = flag.severity as Severity;
   const colors = SEVERITY_COLORS[sev];
   return (
@@ -156,30 +211,66 @@ function FlagCard({ flag, onDismiss }: { flag: AuditFlag; onDismiss: () => void 
         borderLeftWidth: "3px",
       }}
     >
-      <button
-        onClick={onDismiss}
-        title="Dismiss this flag"
-        style={{
-          position: "absolute",
-          top: "0.5rem",
-          right: "0.5rem",
-          background: "transparent",
-          border: "none",
-          color: "var(--text-muted)",
-          fontSize: "0.875rem",
-          padding: "0.15rem 0.35rem",
-          cursor: "pointer",
-          lineHeight: 1,
-        }}
-      >
-        ×
-      </button>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: "0.625rem", paddingRight: "1.5rem" }}>
+      <div style={{ position: "absolute", top: "0.5rem", right: "0.5rem", display: "flex", gap: "0.25rem", alignItems: "center" }}>
+        {onView && (
+          <button
+            onClick={onView}
+            title="View transactions"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--border)",
+              color: "var(--text-muted)",
+              fontSize: "0.7rem",
+              padding: "0.1rem 0.4rem",
+              cursor: "pointer",
+              lineHeight: 1.4,
+            }}
+          >
+            View ↗
+          </button>
+        )}
+        <button
+          onClick={onDismiss}
+          title="Dismiss this flag"
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "var(--text-muted)",
+            fontSize: "0.875rem",
+            padding: "0.15rem 0.35rem",
+            cursor: "pointer",
+            lineHeight: 1,
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "0.625rem", paddingRight: "4rem" }}>
         <FlagBadge type={flag.flag_type} />
         <p style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
           {flag.explanation}
         </p>
       </div>
+      {flag.extra?.top_merchants != null && Array.isArray(flag.extra.top_merchants) && (
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.375rem", paddingLeft: "0.25rem" }}>
+          {(flag.extra.top_merchants as { merchant: string; total: number }[]).map((m, i) => (
+            <span
+              key={i}
+              style={{
+                fontSize: "0.7rem",
+                padding: "0.1rem 0.4rem",
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius)",
+                color: "var(--text-muted)",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {m.merchant} ${m.total.toFixed(0)}
+            </span>
+          ))}
+        </div>
+      )}
       <TxRow tx={flag.transaction} />
     </div>
   );
@@ -200,7 +291,7 @@ function SummaryBar({
     (acc, f) => { acc[f.flag_type] = (acc[f.flag_type] ?? 0) + 1; return acc; },
     {} as Record<FlagType, number>
   );
-  const types: FlagType[] = ["duplicate-like", "unusually-large", "bank-fee", "new-merchant"];
+  const types: FlagType[] = ["duplicate-like", "unusually-large", "category-spike", "merchant-anomaly", "bank-fee", "new-merchant"];
 
   return (
     <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -219,7 +310,7 @@ function SummaryBar({
       {types.map((t) => {
         const n = counts[t] ?? 0;
         if (n === 0) return null;
-        const sev: Severity = t === "duplicate-like" || t === "unusually-large" ? "warning" : "info";
+        const sev: Severity = flagSeverity(t);
         const active = activeFilter === t;
         const accent = SEVERITY_COLORS[sev].badge;
         return (
@@ -399,7 +490,12 @@ function saveDismissed(set: Set<string>): void {
   localStorage.setItem("audit_dismissed", JSON.stringify([...set]));
 }
 
-export default function AuditPage({ refreshKey }: { refreshKey: number }) {
+interface AuditPageProps {
+  onNavigateToTransactions?: (filters: TransactionFilters) => void;
+}
+
+export default function AuditPage({ onNavigateToTransactions }: AuditPageProps) {
+  const { refreshKey } = useFinance();
   const defaultRange = currentMonthRange();
   const [fromDate, setFromDate] = useState(defaultRange.from);
   const [toDate, setToDate] = useState(defaultRange.to);
@@ -534,7 +630,7 @@ export default function AuditPage({ refreshKey }: { refreshKey: number }) {
       >
         {(Object.keys(FLAG_META) as FlagType[]).map((t) => {
           const meta = FLAG_META[t];
-          const sev: Severity = t === "duplicate-like" || t === "unusually-large" ? "warning" : "info";
+          const sev: Severity = flagSeverity(t);
           const colors = SEVERITY_COLORS[sev];
           return (
             <div
@@ -587,7 +683,16 @@ export default function AuditPage({ refreshKey }: { refreshKey: number }) {
             <>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.625rem" }}>
                 {visibleFlags.map((flag, i) => (
-                  <FlagCard key={`${flag.flag_type}-${flag.transaction.id}-${i}`} flag={flag} onDismiss={() => handleDismiss(flag)} />
+                  <FlagCard
+                    key={`${flag.flag_type}-${flag.transaction.id}-${i}`}
+                    flag={flag}
+                    onDismiss={() => handleDismiss(flag)}
+                    onView={
+                      onNavigateToTransactions
+                        ? () => onNavigateToTransactions(buildViewFilters(flag, fromDate, toDate))
+                        : undefined
+                    }
+                  />
                 ))}
               </div>
               {dismissedCount > 0 && (

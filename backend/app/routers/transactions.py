@@ -4,16 +4,24 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from ..database import get_db, get_db_download
-from ..models import Import, Transaction
-from ..schemas import PatchTransactionCategory, PatchTransactionNote, TransactionListResponse, TransactionSchema
+from ..models import Import, Tag, Transaction, transaction_tags
+from ..schemas import (
+    PatchTransactionCategory,
+    PatchTransactionNote,
+    TagAssignRequest,
+    TagSchema,
+    TransactionListResponse,
+    TransactionSchema,
+)
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 
-def _tx_to_schema(tx: Transaction) -> TransactionSchema:
+def _tx_to_schema(tx: Transaction, tags: list | None = None) -> TransactionSchema:
     rule = tx.category_rule
     return TransactionSchema(
         id=tx.id,
@@ -24,6 +32,7 @@ def _tx_to_schema(tx: Transaction) -> TransactionSchema:
         amount_cents=tx.amount_cents,
         currency=tx.currency,
         merchant=tx.merchant,
+        merchant_canonical=tx.merchant_canonical,
         category_id=tx.category_id,
         category_name=tx.category.name if tx.category else None,
         category_color=tx.category.color if tx.category else None,
@@ -37,6 +46,7 @@ def _tx_to_schema(tx: Transaction) -> TransactionSchema:
         category_rule_match_type=rule.match_type if rule else None,
         category_rule_priority=rule.priority if rule else None,
         created_at=tx.created_at,
+        tags=tags if tags is not None else [],
     )
 
 
@@ -56,6 +66,9 @@ def list_transactions(
     uncategorized: bool = Query(default=False, description="Return only uncategorized rows"),
     from_date: Optional[str] = Query(default=None, description="Filter from date (YYYY-MM-DD)"),
     to_date: Optional[str] = Query(default=None, description="Filter to date (YYYY-MM-DD)"),
+    merchant_search: Optional[str] = Query(default=None, description="Filter by merchant name (partial match)"),
+    tag_id: Optional[int] = Query(default=None, description="Filter by tag ID (any match)"),
+    include_tags: bool = Query(default=False, description="Include tags list per row (adds one DB query)"),
     db: Session = Depends(get_db),
 ):
     query = _base_query(db)
@@ -70,6 +83,22 @@ def list_transactions(
         query = query.filter(Transaction.posted_date >= from_date)
     if to_date is not None:
         query = query.filter(Transaction.posted_date <= to_date)
+    if merchant_search:
+        pat = f"%{merchant_search}%"
+        query = query.filter(
+            or_(Transaction.merchant_canonical.ilike(pat), Transaction.merchant.ilike(pat))
+        )
+    if tag_id is not None:
+        query = query.filter(
+            Transaction.id.in_(
+                db.query(transaction_tags.c.transaction_id).filter(
+                    transaction_tags.c.tag_id == tag_id
+                )
+            )
+        )
+
+    if include_tags:
+        query = query.options(selectinload(Transaction.tags))
 
     total = query.count()
     items = (
@@ -79,7 +108,12 @@ def list_transactions(
         .all()
     )
 
-    return {"total": total, "items": [_tx_to_schema(tx) for tx in items]}
+    def _tags_for(tx: Transaction) -> list:
+        if not include_tags:
+            return []
+        return [TagSchema(id=t.id, name=t.name, color=t.color, created_at=t.created_at) for t in tx.tags]
+
+    return {"total": total, "items": [_tx_to_schema(tx, tags=_tags_for(tx)) for tx in items]}
 
 
 @router.get("/export", summary="Export filtered transactions as CSV")
@@ -89,6 +123,7 @@ def export_transactions_csv(
     uncategorized: bool = Query(default=False),
     from_date: Optional[str] = Query(default=None),
     to_date: Optional[str] = Query(default=None),
+    merchant_search: Optional[str] = Query(default=None),
     db: Session = Depends(get_db_download),
 ):
     query = _base_query(db)
@@ -102,6 +137,11 @@ def export_transactions_csv(
         query = query.filter(Transaction.posted_date >= from_date)
     if to_date is not None:
         query = query.filter(Transaction.posted_date <= to_date)
+    if merchant_search:
+        pat = f"%{merchant_search}%"
+        query = query.filter(
+            or_(Transaction.merchant_canonical.ilike(pat), Transaction.merchant.ilike(pat))
+        )
     txns = query.order_by(Transaction.posted_date.desc(), Transaction.id.desc()).all()
 
     output = io.StringIO()
@@ -135,7 +175,7 @@ def patch_category(tx_id: int, body: PatchTransactionCategory, db: Session = Dep
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
     tx.category_id = body.category_id
-    tx.category_source = "manual" if body.category_id is not None else None
+    tx.category_source = "manual" if body.category_id is not None else "uncategorized"
     tx.category_rule_id = None
     db.commit()
     # Reload with joins for the response
@@ -161,3 +201,40 @@ def delete_transaction(tx_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Transaction not found")
     db.delete(tx)
     db.commit()
+
+
+# ── Tag management on transactions ───────────────────────────────────────────
+
+
+@router.get("/{tx_id}/tags", response_model=list[TagSchema], summary="List tags for a transaction")
+def get_transaction_tags(tx_id: int, db: Session = Depends(get_db)):
+    tx = (
+        db.query(Transaction)
+        .options(selectinload(Transaction.tags))
+        .filter(Transaction.id == tx_id)
+        .first()
+    )
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return [TagSchema(id=t.id, name=t.name, color=t.color, created_at=t.created_at) for t in tx.tags]
+
+
+@router.put("/{tx_id}/tags", response_model=list[TagSchema], summary="Replace tags on a transaction")
+def set_transaction_tags(tx_id: int, body: TagAssignRequest, db: Session = Depends(get_db)):
+    tx = (
+        db.query(Transaction)
+        .options(selectinload(Transaction.tags))
+        .filter(Transaction.id == tx_id)
+        .first()
+    )
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if body.tag_ids:
+        tags = db.query(Tag).filter(Tag.id.in_(body.tag_ids)).all()
+        if len(tags) != len(set(body.tag_ids)):
+            raise HTTPException(status_code=422, detail="One or more tag IDs not found.")
+    else:
+        tags = []
+    tx.tags = tags
+    db.commit()
+    return [TagSchema(id=t.id, name=t.name, color=t.color, created_at=t.created_at) for t in tx.tags]

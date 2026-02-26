@@ -1,14 +1,20 @@
 import { useState } from "react";
+import OperatorChecklistDoc from "../pages/docs/OperatorChecklistDoc";
 
-type Section = "overview" | "install" | "import" | "security" | "profiles" | "terms";
+type Section = "overview" | "install" | "import" | "security" | "profiles" | "aliases" | "data-health" | "ai" | "operator-checklist" | "contact" | "terms";
 
 const NAV: { id: Section; label: string }[] = [
-  { id: "overview",  label: "Overview" },
-  { id: "install",   label: "Installation" },
-  { id: "import",    label: "Importing Data" },
-  { id: "security",  label: "Data Security" },
-  { id: "profiles",  label: "Profiles" },
-  { id: "terms",     label: "Terms & Conditions" },
+  { id: "overview",            label: "Overview" },
+  { id: "install",             label: "Installation" },
+  { id: "import",              label: "Importing Data" },
+  { id: "security",            label: "Data Security" },
+  { id: "profiles",            label: "Profiles" },
+  { id: "aliases",             label: "Merchant Aliases" },
+  { id: "data-health",         label: "Data Health" },
+  { id: "ai",                  label: "AI Assistant" },
+  { id: "operator-checklist",  label: "Operator Checklist" },
+  { id: "contact",             label: "Contact & Feedback" },
+  { id: "terms",               label: "Terms & Conditions" },
 ];
 
 // ── Shared primitives ─────────────────────────────────────────────────────────
@@ -195,7 +201,7 @@ profiles/ ← SQLite databases  (one .db per profile)`}</Block>
 
       <H2>What it does</H2>
       <ul style={{ paddingLeft: "1.25rem", margin: "0 0 1rem" }}>
-        <Li>Imports bank/credit card statements via CSV, PDF, or PayPal CSV export</Li>
+        <Li>Imports bank/credit card statements via CSV, PDF, TXT, or PayPal CSV export</Li>
         <Li>Deduplicates transactions across imports automatically</Li>
         <Li>Categorises transactions with a rule engine (keyword matching + regex)</Li>
         <Li>Generates monthly summaries, category breakdowns, candlestick spending charts</Li>
@@ -337,19 +343,19 @@ function ImportData() {
 
       <H2>PDF / TXT Statement Import</H2>
       <P>
-        For banks that only provide PDF statements (e.g. mortgage servicers, legacy institutions),
-        the PDF importer extracts transaction tables automatically.
+        For banks that only provide PDF or plain-text statements (e.g. mortgage servicers, legacy institutions),
+        the PDF / TXT importer extracts transaction tables automatically. Both <Code>.pdf</Code> and <Code>.txt</Code> files are accepted.
       </P>
       <ol style={{ paddingLeft: "1.25rem", margin: "0 0 1rem" }}>
-        <Li>Download your PDF statement from your bank portal</Li>
+        <Li>Download your PDF or TXT statement from your bank portal</Li>
         <Li>Go to <strong style={{ color: "var(--text)" }}>Import → PDF / TXT Statement</strong></Li>
         <Li>Upload the file — DigitalSov attempts automatic column detection</Li>
         <Li>If auto-detection works: review the preview and confirm</Li>
         <Li>If the layout is unusual: use the manual column mapping screen</Li>
       </ol>
       <Callout type="warn">
-        PDF extraction quality depends on how the statement was generated.
-        Text-based PDFs work well. Scanned image PDFs (photos of paper statements)
+        PDF/TXT extraction quality depends on how the statement was generated.
+        Text-based PDFs and plain <Code>.txt</Code> exports work well. Scanned image PDFs (photos of paper statements)
         are not supported — request a digital export from your bank.
       </Callout>
 
@@ -657,18 +663,214 @@ function Terms() {
   );
 }
 
+// ── Merchant Aliases section ──────────────────────────────────────────────────
+
+function AliasesDocs() {
+  return (
+    <div>
+      <H1>MERCHANT ALIASES</H1>
+      <P>
+        Every transaction has a raw <strong style={{ color: "var(--text)" }}>merchant</strong> field extracted from
+        the bank description and a <strong style={{ color: "var(--text)" }}>canonical</strong> name that groups the
+        same merchant across different raw strings.
+      </P>
+      <H2>Why Canonical Names Matter</H2>
+      <P>
+        Your bank may record the same merchant as "AMZN", "AMAZON.COM", "AMAZON PRIME", or
+        "AMZ*1234567". Without aliases these look like four different merchants to the AI and
+        to the categorization rules. Once you map them all to "Amazon", every query, report,
+        and recurring detection sees them as one merchant.
+      </P>
+      <H2>Adding Aliases</H2>
+      <P>
+        Go to <strong style={{ color: "var(--text)" }}>Transactions → Merchant Aliases</strong>. Enter the raw
+        alias string exactly as it appears in your transactions (case-insensitive) and the
+        canonical display name you want to use.
+      </P>
+      <P>
+        You can also click the <strong style={{ color: "var(--text)" }}>✎</strong> icon next to any merchant in the
+        Transactions table to open an inline alias form pre-filled with that merchant's name.
+      </P>
+      <H2>Rebuilding Canonical Names</H2>
+      <P>
+        After adding or editing aliases, click <strong style={{ color: "var(--text)" }}>Rebuild canonical merchants</strong> to
+        recompute <code>merchant_canonical</code> for all existing transactions. New imports
+        automatically apply the alias map at import time — no manual rebuild needed.
+      </P>
+      <H2>Impact on AI Queries</H2>
+      <P>
+        The AI assistant uses <code>merchant_canonical</code> when filtering transactions by
+        merchant. Asking "how much did I spend at Amazon?" will correctly aggregate all AMZN
+        variants once they share a canonical name.
+      </P>
+    </div>
+  );
+}
+
+// ── Data Health section ───────────────────────────────────────────────────────
+
+function DataHealthDocs() {
+  return (
+    <div>
+      <H1>DATA HEALTH</H1>
+      <P>
+        The <strong style={{ color: "var(--text)" }}>Health</strong> tab shows at-a-glance quality metrics for your
+        finance data and provides one-click navigation to fix each issue.
+      </P>
+      <H2>Metrics Explained</H2>
+      <ul style={{ paddingLeft: "1.25rem", margin: "0 0 1rem" }}>
+        <Li><strong style={{ color: "var(--text)" }}>Uncategorized transactions</strong> — transactions with no category assigned. These affect budget tracking and AI accuracy.</Li>
+        <Li><strong style={{ color: "var(--text)" }}>Imports missing account label</strong> — imports without a human-readable account name. Labels improve net-worth reports.</Li>
+        <Li><strong style={{ color: "var(--text)" }}>Merchants without canonical</strong> — merchants that have no alias mapping. Add aliases so they group correctly.</Li>
+        <Li><strong style={{ color: "var(--text)" }}>Possible duplicate groups</strong> — sets of transactions with identical date + amount + merchant. Review before accepting.</Li>
+        <Li><strong style={{ color: "var(--text)" }}>Transfer candidates</strong> — transaction pairs that look like inter-account transfers. Confirm them to exclude from income/expense totals.</Li>
+        <Li><strong style={{ color: "var(--text)" }}>Active rules</strong> — rules currently auto-categorizing new imports.</Li>
+      </ul>
+      <H2>Recommended Workflow</H2>
+      <ol style={{ paddingLeft: "1.25rem", margin: "0 0 1rem", fontSize: "0.8125rem", color: "var(--text-secondary)", lineHeight: 1.75 }}>
+        <li>Categorize uncategorized transactions (or add rules to automate it)</li>
+        <li>Label all imports with meaningful account names</li>
+        <li>Add merchant aliases and rebuild canonical names</li>
+        <li>Confirm or dismiss transfer candidates</li>
+        <li>Check and resolve duplicate groups via Audit</li>
+      </ol>
+      <P>
+        Each metric card has an action button that takes you directly to the relevant page.
+        Refresh the Health page after fixing issues to confirm the counts drop.
+      </P>
+    </div>
+  );
+}
+
+// ── AI Assistant section ──────────────────────────────────────────────────────
+
+function AIDocs() {
+  return (
+    <div>
+      <H1>AI ASSISTANT</H1>
+      <P>
+        The AI chat uses a local Ollama model to answer natural-language questions about your
+        finance data. All processing happens on your machine — no data leaves your device.
+      </P>
+      <H2>Evidence Chips</H2>
+      <P>
+        After each answer the AI shows <strong style={{ color: "var(--text)" }}>evidence chips</strong> — the actual
+        database queries it ran to produce the answer. Each chip shows the tool name, a
+        human-readable summary, and a <strong style={{ color: "var(--text)" }}>View ↗</strong> button that opens the
+        matching transactions in the Transactions tab with the exact filters applied.
+      </P>
+      <H2>Redaction by Default</H2>
+      <P>
+        Raw transaction descriptions are redacted by default in AI context to reduce noise
+        and protect sensitive strings. The AI uses normalized descriptions and merchant
+        names instead. You can disable this in LLM Settings if needed.
+      </P>
+      <H2>Model Selection</H2>
+      <P>
+        Two models are supported: a <strong style={{ color: "var(--text)" }}>Quality model</strong> (default, slower,
+        more accurate) and a <strong style={{ color: "var(--text)" }}>Fast model</strong> (quicker responses,
+        smaller context window). Toggle Fast mode in the AI chat header or in LLM Settings.
+      </P>
+      <P>
+        Recommended models: <code>llama3.1:latest</code> for quality, <code>llama3.2:3b-instruct-q8_0</code> for
+        speed. Pull them via LLM Settings → Pull Recommended.
+      </P>
+      <H2>Audit Navigation</H2>
+      <P>
+        Audit flags now include a <strong style={{ color: "var(--text)" }}>View ↗</strong> button that navigates to
+        the Transactions tab filtered to the relevant date range, category, or merchant
+        for each flag. This makes it easy to investigate spikes and anomalies in context.
+      </P>
+    </div>
+  );
+}
+
+// ── Contact & Feedback ────────────────────────────────────────────────────────
+
+function Contact() {
+  return (
+    <div>
+      <H1>Contact &amp; Feedback</H1>
+
+      <P>
+        DigitalSov is built for personal use, but your feedback shapes it.
+        Whether you've hit a bug, have a feature idea, or want to report an edge
+        case in your data — reach out directly.
+      </P>
+
+      <div
+        style={{
+          margin: "1.5rem 0",
+          padding: "1.25rem 1.5rem",
+          background: "var(--surface-raised)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius)",
+          display: "flex",
+          flexDirection: "column" as const,
+          gap: "0.375rem",
+        }}
+      >
+        <span style={{ fontSize: "0.7rem", fontFamily: "var(--font-mono)", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "0.08em" }}>
+          EMAIL
+        </span>
+        <a
+          href="mailto:digitalsov2026@gmail.com"
+          style={{
+            fontSize: "1rem",
+            fontFamily: "var(--font-mono)",
+            fontWeight: 700,
+            color: "var(--accent)",
+            textDecoration: "none",
+          }}
+        >
+          digitalsov2026@gmail.com
+        </a>
+      </div>
+
+      <H2>What to include in a bug report</H2>
+      <P>The more context the better:</P>
+      <ul style={{ margin: "0.5rem 0 1rem 1.25rem", lineHeight: 1.8 }}>
+        <Li>What you were doing when the issue occurred</Li>
+        <Li>What you expected to happen vs. what actually happened</Li>
+        <Li>The type of file you were importing (CSV, PDF, TXT, PayPal)</Li>
+        <Li>Any error message shown on screen</Li>
+        <Li>Your operating system and browser (or terminal, if running headless)</Li>
+      </ul>
+
+      <H2>Feature suggestions</H2>
+      <P>
+        Have an idea for a new report, import format, AI tool, or workflow
+        improvement? Send a quick description to the email above. No formal
+        template needed — a sentence or two is enough.
+      </P>
+
+      <H2>Response time</H2>
+      <P>
+        This is a solo-maintained project. Responses are best-effort, but every
+        message is read. Critical bugs (data loss, import failures, crashes) are
+        prioritized.
+      </P>
+    </div>
+  );
+}
+
 // ── Root component ────────────────────────────────────────────────────────────
 
 export default function DocsPage() {
   const [active, setActive] = useState<Section>("overview");
 
   const CONTENT: Record<Section, React.ReactNode> = {
-    overview: <Overview />,
-    install:  <Install />,
-    import:   <ImportData />,
-    security: <Security />,
-    profiles: <Profiles />,
-    terms:    <Terms />,
+    overview:             <Overview />,
+    install:              <Install />,
+    import:               <ImportData />,
+    security:             <Security />,
+    profiles:             <Profiles />,
+    aliases:              <AliasesDocs />,
+    "data-health":        <DataHealthDocs />,
+    ai:                   <AIDocs />,
+    "operator-checklist": <OperatorChecklistDoc />,
+    contact:              <Contact />,
+    terms:                <Terms />,
   };
 
   return (

@@ -8,13 +8,10 @@ from sqlalchemy import engine_from_config, pool
 # Make `app` importable when running `alembic` from the backend/ directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from app.database import Base, DATABASE_URL  # noqa: E402
-import app.models  # noqa: F401, E402 – register models with Base.metadata
+import app.models  # noqa: F401 – register models with Base.metadata
+from app.database import Base  # noqa: E402
 
 config = context.config
-
-# Override URL from app settings so there is a single source of truth
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -29,6 +26,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_as_batch=True,  # Required for SQLite column alterations
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -44,6 +42,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            render_as_batch=True,  # Required for SQLite column alterations
         )
         with context.begin_transaction():
             context.run_migrations()

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getLLMSettings, listOllamaModels, pingOllama, pullOllamaModel, streamChat } from "../api/client";
-import type { ChatMessage, ChatResponse, LLMSettings, PullProgress, ToolCall } from "../types";
+import { useFinance } from "../context/FinanceContext";
+import type { ChatMessage, ChatResponse, EvidenceFilters, LLMSettings, PullProgress, ToolCall, TransactionFilters } from "../types";
 
 // ── Internal state types ───────────────────────────────────────────────────────
 
@@ -25,7 +26,18 @@ interface LoadingState {
 }
 
 interface Props {
-  refreshKey?: number;
+  onNavigateToTransactions?: (filters: TransactionFilters) => void;
+}
+
+function evidenceToFilters(ef: EvidenceFilters): TransactionFilters {
+  return {
+    from_date: ef.from ?? null,
+    to_date: ef.to ?? null,
+    category_id: ef.category_id ?? null,
+    merchant_search: ef.merchant ?? null,
+    import_id: ef.import_id ?? null,
+    uncategorized: ef.uncategorized ?? false,
+  };
 }
 
 const DEFAULT_MODEL = "llama3.1:latest";
@@ -42,7 +54,8 @@ const TOOL_ICONS: Record<string, string> = {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function ChatPage({ refreshKey }: Props) {
+export default function ChatPage({ onNavigateToTransactions }: Props) {
+  const { refreshKey } = useFinance();
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -342,21 +355,53 @@ export default function ChatPage({ refreshKey }: Props) {
               {msg.error ? `Error: ${msg.error}` : msg.structured?.answer ?? msg.content}
             </div>
 
-            {/* Facts used */}
+            {/* Evidence chips */}
             {msg.structured?.facts_used && msg.structured.facts_used.length > 0 && (
               <div style={{ maxWidth: "82%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: "0.5rem 0.75rem", fontSize: "0.75rem" }}>
                 <p style={{ fontSize: "0.6875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginBottom: "0.375rem" }}>
-                  Facts cited
+                  Verify
                 </p>
-                {msg.structured.facts_used.map((f, fi) => (
-                  <div key={fi} style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "0.375rem", alignItems: "baseline", marginBottom: "0.125rem" }}>
-                    <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>{f.label}:</span>
-                    <span style={{ fontWeight: 600 }}>{f.value}</span>
-                    <span style={{ fontSize: "0.6875rem", color: "var(--text-muted)", background: "var(--bg)", padding: "0.0625rem 0.375rem", borderRadius: "var(--radius)", border: "1px solid var(--border)", whiteSpace: "nowrap" }}>
-                      {f.source}
-                    </span>
-                  </div>
-                ))}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
+                  {msg.structured.facts_used.map((f, fi) => {
+                    const hasFilters = f.filters && Object.keys(f.filters).length > 0;
+                    const chipStyle = {
+                      fontSize: "0.6875rem",
+                      padding: "0.1875rem 0.5rem",
+                      borderRadius: "var(--radius)",
+                      border: "1px solid var(--border-strong)",
+                      background: "var(--bg)",
+                      color: "var(--text-secondary)",
+                      whiteSpace: "nowrap" as const,
+                      cursor: hasFilters ? "pointer" : "default",
+                      textDecoration: "none" as const,
+                    };
+                    const label = `${f.label}: ${f.value}`;
+                    if (hasFilters && onNavigateToTransactions) {
+                      return (
+                        <button
+                          key={fi}
+                          title={`${f.source} — click to view transactions`}
+                          onClick={() => onNavigateToTransactions(evidenceToFilters(f.filters!))}
+                          style={{ ...chipStyle, background: "var(--accent-light)", color: "var(--accent)", border: "1px solid var(--border-strong)" }}
+                        >
+                          {label} ↗
+                        </button>
+                      );
+                    }
+                    return (
+                      <span key={fi} title={f.source} style={chipStyle}>
+                        {label}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Disclaimer */}
+            {msg.role === "assistant" && !msg.error && msg.structured && (
+              <div style={{ maxWidth: "82%", fontSize: "0.6875rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                Pattern analysis, not financial advice. Use Evidence to verify.
               </div>
             )}
 

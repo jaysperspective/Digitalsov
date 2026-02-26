@@ -1,13 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   applyRules,
   createRule,
   deleteRule,
-  getCategories,
-  getRules,
   updateRule,
 } from "../api/client";
-import type { ApplyRulesResponse, Category, MatchType, Rule, RuleCreate } from "../types";
+import { useFinance } from "../context/FinanceContext";
+import type { ApplyRulesResponse, Category, MatchType, RuleCreate } from "../types";
 
 const MATCH_TYPE_LABELS: Record<MatchType, string> = {
   contains: "Contains",
@@ -140,10 +139,8 @@ function RuleForm({ initial = EMPTY_FORM, categories, onSave, onCancel, saving }
   );
 }
 
-export default function RulesPage({ refreshKey }: { refreshKey: number }) {
-  const [rules, setRules] = useState<Rule[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function RulesPage() {
+  const { categories, rules, refreshRules, bump } = useFinance();
   const [error, setError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
@@ -151,17 +148,6 @@ export default function RulesPage({ refreshKey }: { refreshKey: number }) {
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [applyResult, setApplyResult] = useState<ApplyRulesResponse | null>(null);
   const [applying, setApplying] = useState(false);
-
-  const load = () => {
-    setLoading(true);
-    setError(null);
-    Promise.all([getRules(), getCategories()])
-      .then(([r, c]) => { setRules(r); setCategories(c); })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load"))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toPayload = (form: RuleFormState): RuleCreate => ({
     pattern: form.pattern,
@@ -176,7 +162,7 @@ export default function RulesPage({ refreshKey }: { refreshKey: number }) {
     try {
       await createRule(toPayload(form));
       setShowAddForm(false);
-      load();
+      await refreshRules();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create");
     } finally {
@@ -189,7 +175,7 @@ export default function RulesPage({ refreshKey }: { refreshKey: number }) {
     try {
       await updateRule(id, toPayload(form));
       setEditId(null);
-      load();
+      await refreshRules();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to update");
     } finally {
@@ -202,7 +188,7 @@ export default function RulesPage({ refreshKey }: { refreshKey: number }) {
     try {
       await deleteRule(id);
       setDeleteConfirm(null);
-      load();
+      await refreshRules();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to delete");
     } finally {
@@ -217,6 +203,8 @@ export default function RulesPage({ refreshKey }: { refreshKey: number }) {
     try {
       const res = await applyRules();
       setApplyResult(res);
+      await refreshRules();
+      bump();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to apply rules");
     } finally {
@@ -297,10 +285,7 @@ export default function RulesPage({ refreshKey }: { refreshKey: number }) {
         </div>
       )}
 
-      {loading ? (
-        <p style={{ color: "var(--text-muted)", fontSize: "0.8125rem" }}>Loading…</p>
-      ) : (
-        <table>
+      <table>
           <thead>
             <tr>
               <th>Pattern</th>
@@ -432,8 +417,7 @@ export default function RulesPage({ refreshKey }: { refreshKey: number }) {
               ))
             )}
           </tbody>
-        </table>
-      )}
+      </table>
     </div>
   );
 }

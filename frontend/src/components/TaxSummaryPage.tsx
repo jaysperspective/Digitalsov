@@ -8,31 +8,27 @@
  * Provides a CSV download via /reports/tax-export?year=YYYY.
  */
 
-import { useEffect, useState } from "react";
-import { getCategories, getCategoryBreakdown, getIncomeHousing, getPeriodSummary, taxExportURL } from "../api/client";
-import type { Category, CategoryBreakdown, IncomeHousingReport, PeriodSummary } from "../types";
-
-interface Props {
-  refreshKey?: number;
-}
+import { useEffect, useMemo, useState } from "react";
+import { getCategoryBreakdown, getIncomeHousing, getPeriodSummary, taxExportURL } from "../api/client";
+import { useFinance } from "../context/FinanceContext";
+import type { CategoryBreakdown, IncomeHousingReport, PeriodSummary } from "../types";
 
 const CURRENT_YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: 5 }, (_, i) => String(CURRENT_YEAR - i));
 
-export default function TaxSummaryPage({ refreshKey }: Props) {
+export default function TaxSummaryPage() {
+  const { refreshKey, categories } = useFinance();
   const [year, setYear] = useState(String(CURRENT_YEAR - 1)); // default: last year
   const [ihp, setIhp] = useState<IncomeHousingReport | null>(null);
   const [breakdown, setBreakdown] = useState<CategoryBreakdown | null>(null);
   const [periodSummary, setPeriodSummary] = useState<PeriodSummary | null>(null);
-  const [categoryMap, setCategoryMap] = useState<Map<number, Category>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    getCategories().then((cats) => {
-      setCategoryMap(new Map(cats.map((c) => [c.id, c])));
-    }).catch(() => {});
-  }, [refreshKey]);
+  const categoryMap = useMemo(
+    () => new Map(categories.map((c) => [c.id, c])),
+    [categories]
+  );
 
   useEffect(() => {
     let cancelled = false;

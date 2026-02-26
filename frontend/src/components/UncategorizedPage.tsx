@@ -3,11 +3,11 @@ import {
   createRule,
   deleteTransaction,
   fetchTransactions,
-  getCategories,
   patchTransactionCategory,
   patchTransactionNote,
 } from "../api/client";
-import type { Category, Transaction } from "../types";
+import { useFinance } from "../context/FinanceContext";
+import type { Transaction } from "../types";
 
 const PAGE_SIZE = 100;
 
@@ -90,13 +90,12 @@ function NoteCell({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function UncategorizedPage({ refreshKey }: { refreshKey: number }) {
+export default function UncategorizedPage() {
+  const { refreshKey, categories } = useFinance();
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [categories, setCategories] = useState<Category[]>([]);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("amount_asc");
   const [offset, setOffset] = useState(0);
@@ -164,7 +163,6 @@ export default function UncategorizedPage({ refreshKey }: { refreshKey: number }
 
   useEffect(() => {
     load(0);
-    getCategories().then(setCategories).catch(() => {});
   }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Filter + sort client-side (on the current page)

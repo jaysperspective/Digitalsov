@@ -13,10 +13,12 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db, get_db_download
 from ..models import Transaction
+from ..services.comparer import get_period_comparison
 from ..services.reporter import (
     get_audit_flags,
     get_candlestick_data,
     get_category_breakdown,
+    get_data_health,
     get_monthly_summary,
     get_net_worth_by_account,
     get_period_summary,
@@ -303,6 +305,11 @@ def candlestick(
     return get_candlestick_data(db, from_date, to_date, period)
 
 
+@router.get("/data-health", summary="Data quality metrics and recommendations")
+def data_health(db: Session = Depends(get_db)):
+    return get_data_health(db)
+
+
 @router.get("/recurring", summary="Detect recurring transactions by merchant pattern")
 def recurring_transactions(db: Session = Depends(get_db)):
     return get_recurring_transactions(db)
@@ -311,6 +318,20 @@ def recurring_transactions(db: Session = Depends(get_db)):
 @router.get("/net-worth", summary="Monthly net flow grouped by account/import")
 def net_worth(db: Session = Depends(get_db)):
     return get_net_worth_by_account(db)
+
+
+@router.get("/compare", summary="Compare two date periods across totals, categories, and merchants")
+def compare_periods(
+    fromA: str = Query(..., description="Period A start date YYYY-MM-DD or YYYY-MM"),
+    toA: str = Query(..., description="Period A end date YYYY-MM-DD or YYYY-MM"),
+    fromB: str = Query(..., description="Period B start date YYYY-MM-DD or YYYY-MM"),
+    toB: str = Query(..., description="Period B end date YYYY-MM-DD or YYYY-MM"),
+    limit_merchants: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    for val, name in [(fromA, "fromA"), (toA, "toA"), (fromB, "fromB"), (toB, "toB")]:
+        _require_date(val, name)
+    return get_period_comparison(db, fromA, toA, fromB, toB, limit_merchants)
 
 
 # ── Tax-year CSV export ───────────────────────────────────────────────────────

@@ -267,6 +267,12 @@ def import_csv(
     except Exception:
         pass  # categorization is best-effort; don't fail the import
 
+    try:
+        from .merchant_canonicalizer import apply_canonical_to_import
+        apply_canonical_to_import(db, import_record.id)
+    except Exception:
+        pass  # canonicalization is best-effort
+
     return {
         "id": import_record.id,
         "filename": filename,
@@ -412,6 +418,12 @@ def import_csv_with_mapping(
     except Exception:
         pass  # categorization is best-effort; don't fail the import
 
+    try:
+        from .merchant_canonicalizer import apply_canonical_to_import
+        apply_canonical_to_import(db, import_record.id)
+    except Exception:
+        pass  # canonicalization is best-effort
+
     return {
         "id": import_record.id,
         "filename": filename,
@@ -539,6 +551,12 @@ def import_paypal_csv(
         auto_categorize_import(db, import_record.id)
     except Exception:
         pass  # categorization is best-effort; don't fail the import
+
+    try:
+        from .merchant_canonicalizer import apply_canonical_to_import
+        apply_canonical_to_import(db, import_record.id)
+    except Exception:
+        pass  # canonicalization is best-effort
 
     return {
         "id": import_record.id,
@@ -694,6 +712,12 @@ def import_pdf_with_mapping(
         auto_categorize_import(db, import_record.id)
     except Exception:
         pass  # categorization is best-effort; don't fail the import
+
+    try:
+        from .merchant_canonicalizer import apply_canonical_to_import
+        apply_canonical_to_import(db, import_record.id)
+    except Exception:
+        pass  # canonicalization is best-effort
 
     return {
         "id": import_record.id,

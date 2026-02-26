@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { getActiveProfile, healthCheck, pingOllama } from "./api/client";
+import { FinanceProvider, useFinance } from "./context/FinanceContext";
 import ProfileGate from "./components/ProfileGate";
 import AuditPage from "./components/AuditPage";
+import ComparePage from "./components/ComparePage";
+import DataHealthPage from "./components/DataHealthPage";
 import IncomeHousingPage from "./components/IncomeHousingPage";
 import CategoriesPage from "./components/CategoriesPage";
 import ChatPage from "./components/ChatPage";
@@ -9,17 +12,20 @@ import DashboardPage from "./components/DashboardPage";
 import ImportsHistory from "./components/ImportsHistory";
 import ImportWizard from "./components/ImportWizard";
 import LLMSettingsPage from "./components/LLMSettingsPage";
+import MerchantAliasesPage from "./components/MerchantAliasesPage";
 import PDFImportFlow from "./components/PDFImportFlow";
 import PayPalImportFlow from "./components/PayPalImportFlow";
+import RuleSuggestionsPanel from "./components/RuleSuggestionsPanel";
+import TagsPage from "./components/TagsPage";
 import TaxSummaryPage from "./components/TaxSummaryPage";
 import RulesPage from "./components/RulesPage";
 import TransactionList from "./components/TransactionList";
 import UncategorizedPage from "./components/UncategorizedPage";
 import DocsPage from "./components/DocsPage";
-import type { ImportResult } from "./types";
+import type { ImportResult, TransactionFilters } from "./types";
 
 type HealthState = "loading" | "ok" | "err";
-type Tab = "dashboard" | "import" | "transactions" | "categories" | "tax" | "ai" | "docs";
+type Tab = "dashboard" | "import" | "transactions" | "categories" | "tax" | "ai" | "health" | "compare" | "docs";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
@@ -27,24 +33,38 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "transactions", label: "Transactions" },
   { id: "categories", label: "Categories" },
   { id: "tax", label: "Tax" },
+  { id: "compare", label: "Compare" },
   { id: "ai", label: "AI" },
+  { id: "health", label: "Health" },
   { id: "docs", label: "Docs" },
 ];
 
 export default function App() {
+  return (
+    <ProfileGate>
+      <FinanceProvider>
+        <AppContent />
+      </FinanceProvider>
+    </ProfileGate>
+  );
+}
+
+function AppContent() {
+  const { bump } = useFinance();
   const [health, setHealth] = useState<HealthState>("loading");
   const [ollamaOk, setOllamaOk] = useState<boolean | null>(null);
   const [lastImport, setLastImport] = useState<ImportResult | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [importSource, setImportSource] = useState<"csv" | "pdf" | "paypal">("csv");
-  const [transactionSection, setTransactionSection] = useState<"all" | "uncategorized">("all");
-  const [categorizationSection, setCategorizationSection] = useState<"categories" | "rules">("categories");
+  const [transactionSection, setTransactionSection] = useState<"all" | "uncategorized" | "aliases" | "tags">("all");
+  const [categorizationSection, setCategorizationSection] = useState<"categories" | "rules" | "suggestions">("categories");
   const [taxSection, setTaxSection] = useState<"finances" | "tax-summary" | "audit">("finances");
   const [aiSection, setAiSection] = useState<"chat" | "llm-settings">("chat");
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem("theme") as "light" | "dark") ?? "dark"
   );
+  const [chatFilters, setChatFilters] = useState<TransactionFilters | null>(null);
+  const [filterKey, setFilterKey] = useState(0);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -61,9 +81,40 @@ export default function App() {
       .catch(() => setOllamaOk(false));
   }, []);
 
+  function navigateToTransactions(filters: TransactionFilters) {
+    setActiveTab("transactions");
+    setTransactionSection("all");
+    setFilterKey((k) => k + 1);
+    setChatFilters(filters);
+  }
+
+  function handleHealthNavigate(tab: string, section?: string, filters?: TransactionFilters) {
+    if (tab === "transactions") {
+      setActiveTab("transactions");
+      if (section === "uncategorized") {
+        setTransactionSection("uncategorized");
+      } else if (section === "aliases") {
+        setTransactionSection("aliases");
+      } else if (section === "tags") {
+        setTransactionSection("tags");
+      } else {
+        setTransactionSection("all");
+        if (filters) {
+          setFilterKey((k) => k + 1);
+          setChatFilters(filters);
+        }
+      }
+    } else if (tab === "import") {
+      setActiveTab("import");
+    } else if (tab === "tax") {
+      setActiveTab("tax");
+      if (section === "audit") setTaxSection("audit");
+    }
+  }
+
   const handleImportComplete = (result: ImportResult) => {
     setLastImport(result);
-    setRefreshKey((k) => k + 1);
+    bump();
     setActiveTab("dashboard");
   };
 
@@ -100,7 +151,6 @@ export default function App() {
   }
 
   return (
-    <ProfileGate>
     <div style={{ minHeight: "100vh" }}>
       {/* ── Header ── */}
       <header
@@ -333,7 +383,7 @@ export default function App() {
           }}
         >
           {/* Dashboard */}
-          {activeTab === "dashboard" && <DashboardPage refreshKey={refreshKey} />}
+          {activeTab === "dashboard" && <DashboardPage />}
 
           {/* Import */}
           {activeTab === "import" && (
@@ -362,7 +412,7 @@ export default function App() {
                   borderTop: "1px solid var(--border)",
                 }}
               >
-                <ImportsHistory refreshKey={refreshKey} />
+                <ImportsHistory />
               </div>
             </>
           )}
@@ -374,12 +424,21 @@ export default function App() {
                 [
                   { id: "all", label: "All Transactions" },
                   { id: "uncategorized", label: "Uncategorized" },
+                  { id: "aliases", label: "Merchant Aliases" },
+                  { id: "tags", label: "Tags" },
                 ],
                 transactionSection,
-                (id) => setTransactionSection(id as "all" | "uncategorized")
+                (id) => setTransactionSection(id as "all" | "uncategorized" | "aliases" | "tags")
               )}
-              {transactionSection === "all" && <TransactionList refreshKey={refreshKey} />}
-              {transactionSection === "uncategorized" && <UncategorizedPage refreshKey={refreshKey} />}
+              {transactionSection === "all" && (
+                <TransactionList
+                  key={filterKey}
+                  initialFilters={chatFilters}
+                />
+              )}
+              {transactionSection === "uncategorized" && <UncategorizedPage />}
+              {transactionSection === "aliases" && <MerchantAliasesPage />}
+              {transactionSection === "tags" && <TagsPage />}
             </>
           )}
 
@@ -390,12 +449,18 @@ export default function App() {
                 [
                   { id: "categories", label: "Categories" },
                   { id: "rules", label: "Rules" },
+                  { id: "suggestions", label: "Suggestions" },
                 ],
                 categorizationSection,
-                (id) => setCategorizationSection(id as "categories" | "rules")
+                (id) => setCategorizationSection(id as "categories" | "rules" | "suggestions")
               )}
-              {categorizationSection === "categories" && <CategoriesPage refreshKey={refreshKey} />}
-              {categorizationSection === "rules" && <RulesPage refreshKey={refreshKey} />}
+              {categorizationSection === "categories" && <CategoriesPage />}
+              {categorizationSection === "rules" && <RulesPage />}
+              {categorizationSection === "suggestions" && (
+                <RuleSuggestionsPanel
+                  onNavigateToTransactions={navigateToTransactions}
+                />
+              )}
             </>
           )}
 
@@ -411,10 +476,26 @@ export default function App() {
                 taxSection,
                 (id) => setTaxSection(id as "finances" | "tax-summary" | "audit")
               )}
-              {taxSection === "finances" && <IncomeHousingPage refreshKey={refreshKey} />}
-              {taxSection === "tax-summary" && <TaxSummaryPage refreshKey={refreshKey} />}
-              {taxSection === "audit" && <AuditPage refreshKey={refreshKey} />}
+              {taxSection === "finances" && <IncomeHousingPage />}
+              {taxSection === "tax-summary" && <TaxSummaryPage />}
+              {taxSection === "audit" && (
+                <AuditPage
+                  onNavigateToTransactions={navigateToTransactions}
+                />
+              )}
             </>
+          )}
+
+          {/* Compare */}
+          {activeTab === "compare" && (
+            <ComparePage onNavigateToTransactions={navigateToTransactions} />
+          )}
+
+          {/* Health */}
+          {activeTab === "health" && (
+            <DataHealthPage
+              onNavigate={handleHealthNavigate}
+            />
           )}
 
           {/* Docs */}
@@ -431,7 +512,11 @@ export default function App() {
                 aiSection,
                 (id) => setAiSection(id as "chat" | "llm-settings")
               )}
-              {aiSection === "chat" && <ChatPage refreshKey={refreshKey} />}
+              {aiSection === "chat" && (
+                <ChatPage
+                  onNavigateToTransactions={navigateToTransactions}
+                />
+              )}
               {aiSection === "llm-settings" && (
                 <LLMSettingsPage
                   onSettingsChange={() => {
@@ -446,6 +531,5 @@ export default function App() {
         </section>
       </main>
     </div>
-    </ProfileGate>
   );
 }

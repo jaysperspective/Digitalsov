@@ -12,7 +12,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { fetchTransactions, getCategories, getCandlestick, getNetWorth, getPeriodSummary, getRecurring, patchTransactionCategory } from "../api/client";
+import { fetchTransactions, getCandlestick, getNetWorth, getPeriodSummary, getRecurring, patchTransactionCategory } from "../api/client";
+import { useFinance } from "../context/FinanceContext";
 import type { CandleData, Category, NetWorthReport, PeriodSummary, RecurringGroup, Transaction } from "../types";
 import CandlestickChart from "./CandlestickChart";
 
@@ -457,7 +458,8 @@ function DashboardTransactionTable({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function DashboardPage({ refreshKey }: { refreshKey: number }) {
+export default function DashboardPage() {
+  const { refreshKey, categories } = useFinance();
   const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [anchor, setAnchor] = useState<string>(currentMonthAnchor);
   const [chartGranularity, setChartGranularity] = useState<"month" | "week" | "day">("day");
@@ -467,7 +469,6 @@ export default function DashboardPage({ refreshKey }: { refreshKey: number }) {
   const [candles, setCandles] = useState<CandleData[]>([]);
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [txTotal, setTxTotal] = useState(0);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [netWorth, setNetWorth] = useState<NetWorthReport | null>(null);
@@ -475,10 +476,6 @@ export default function DashboardPage({ refreshKey }: { refreshKey: number }) {
   const [recurring, setRecurring] = useState<RecurringGroup[]>([]);
   const [recurringOpen, setRecurringOpen] = useState(false);
   const [expandedRecurring, setExpandedRecurring] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    getCategories().then(setCategories).catch(() => {});
-  }, [refreshKey]);
 
   const { from, to } = getDateRange(viewMode, anchor);
   const { from: prevFrom, to: prevTo } = getPrevDateRange(viewMode, anchor);

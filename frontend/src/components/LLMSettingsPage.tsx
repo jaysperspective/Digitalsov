@@ -205,15 +205,42 @@ export default function LLMSettingsPage({ onSettingsChange }: Props) {
               </tr>
             </thead>
             <tbody>
-              {models.map((m) => (
-                <tr key={m.name} style={{ borderTop: "1px solid var(--border)" }}>
-                  <td style={{ padding: "0.375rem 0.75rem", fontSize: "0.8125rem", fontFamily: "monospace" }}>{m.name}</td>
-                  <td style={{ padding: "0.375rem 0.75rem", fontSize: "0.8125rem", color: "var(--text-secondary)" }}>{m.size}</td>
-                  <td style={{ padding: "0.375rem 0.75rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                    {m.modified ? new Date(m.modified).toLocaleDateString() : "—"}
-                  </td>
-                </tr>
-              ))}
+              {models.map((m) => {
+                const isActive =
+                  settings.use_fast_mode
+                    ? m.name === settings.fast_model
+                    : m.name === settings.model;
+                return (
+                  <tr key={m.name} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "0.375rem 0.75rem", fontSize: "0.8125rem", fontFamily: "monospace" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                        {m.name}
+                        {isActive && (
+                          <span
+                            style={{
+                              fontSize: "0.6rem",
+                              fontFamily: "var(--font-mono)",
+                              fontWeight: 700,
+                              letterSpacing: "0.06em",
+                              padding: "0.05rem 0.35rem",
+                              borderRadius: "3px",
+                              background: "var(--accent-light, rgba(99,102,241,0.15))",
+                              color: "var(--accent)",
+                              border: "1px solid var(--accent)44",
+                            }}
+                          >
+                            ACTIVE
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td style={{ padding: "0.375rem 0.75rem", fontSize: "0.8125rem", color: "var(--text-secondary)" }}>{m.size}</td>
+                    <td style={{ padding: "0.375rem 0.75rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                      {m.modified ? new Date(m.modified).toLocaleDateString() : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -222,6 +249,35 @@ export default function LLMSettingsPage({ onSettingsChange }: Props) {
       {/* ── Pull a model ── */}
       <div>
         <p style={sectionTitle}>Pull a Model</p>
+
+        {/* Recommended model buttons */}
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+          {[
+            { label: "Quality: llama3.1:latest", model: "llama3.1:latest" },
+            { label: "Fast: llama3.2:3b-instruct-q8_0", model: "llama3.2:3b-instruct-q8_0" },
+          ].map((rec) => (
+            <button
+              key={rec.model}
+              onClick={() => {
+                setPullModel(rec.model);
+              }}
+              disabled={pulling || !ollamaAvailable}
+              style={{
+                fontSize: "0.75rem",
+                padding: "0.3rem 0.75rem",
+                background: "var(--surface-raised)",
+                color: "var(--text-secondary)",
+                border: "1px solid var(--border)",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.3rem",
+              }}
+            >
+              ⬇ {rec.label}
+            </button>
+          ))}
+        </div>
+
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end", marginBottom: "0.75rem" }}>
           <div style={{ flex: 1 }}>
             <label style={labelStyle}>Model name</label>

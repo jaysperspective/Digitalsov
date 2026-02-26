@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { createCategory, deleteCategory, fetchTransactions, getCategories, updateCategory } from "../api/client";
-import type { Category, CategoryCreate, Transaction } from "../types";
+import { createCategory, deleteCategory, fetchTransactions, updateCategory } from "../api/client";
+import { useFinance } from "../context/FinanceContext";
+import type { CategoryCreate, Transaction } from "../types";
 
 const PRESET_COLORS = [
   "#ef4444", "#f97316", "#eab308", "#22c55e",
@@ -225,26 +226,14 @@ function CategoryDrilldown({ categoryId, categoryName }: { categoryId: number; c
   );
 }
 
-export default function CategoriesPage({ refreshKey }: { refreshKey: number }) {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function CategoriesPage() {
+  const { categories, refreshCategories } = useFinance();
   const [error, setError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
-
-  const load = () => {
-    setLoading(true);
-    setError(null);
-    getCategories()
-      .then(setCategories)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load"))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAdd = async (form: FormState) => {
     setSaving(true);
@@ -259,7 +248,7 @@ export default function CategoriesPage({ refreshKey }: { refreshKey: number }) {
       };
       await createCategory(payload);
       setShowAddForm(false);
-      load();
+      await refreshCategories();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create");
     } finally {
@@ -280,7 +269,7 @@ export default function CategoriesPage({ refreshKey }: { refreshKey: number }) {
       };
       await updateCategory(id, payload);
       setEditId(null);
-      load();
+      await refreshCategories();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to update");
     } finally {
@@ -293,7 +282,7 @@ export default function CategoriesPage({ refreshKey }: { refreshKey: number }) {
     try {
       await deleteCategory(id);
       setDeleteConfirm(null);
-      load();
+      await refreshCategories();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to delete");
     } finally {
@@ -338,10 +327,7 @@ export default function CategoriesPage({ refreshKey }: { refreshKey: number }) {
         </div>
       )}
 
-      {loading ? (
-        <p style={{ color: "var(--text-muted)", fontSize: "0.8125rem" }}>Loading…</p>
-      ) : (
-        <table>
+      <table>
           <thead>
             <tr>
               <th>Category</th>
@@ -485,8 +471,7 @@ export default function CategoriesPage({ refreshKey }: { refreshKey: number }) {
               ))
             )}
           </tbody>
-        </table>
-      )}
+      </table>
     </div>
   );
 }

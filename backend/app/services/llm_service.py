@@ -17,6 +17,19 @@ DEFAULT_MODEL = "llama3.1:latest"
 DEFAULT_FAST_MODEL = "llama3.2:3b-instruct-q8_0"
 MAX_TOOL_ITERATIONS = 6
 
+# Phrases that trigger inclusion of raw descriptions in tool results.
+# All comparisons are performed on lower-cased user message content.
+_RAW_DESC_PHRASES = (
+    "show raw descriptions",
+    "include full descriptions",
+    "show full transaction descriptions",
+    "include raw descriptions",
+    "full descriptions",
+    "raw descriptions",
+    "show descriptions",
+    "include descriptions",
+)
+
 # ── DigitalSov app knowledge injected into every chat session ─────────────────
 DIGITALSOV_DOCS = """
 === About DigitalSov ===
@@ -76,7 +89,8 @@ On first startup, existing finance.db is migrated to profiles/default.db automat
 - Net worth report: aggregate balance across all imported accounts over time
 """
 
-# JSON Schema enforced on the final structured response (no tools in this call)
+# JSON Schema enforced on the final structured response.
+# The "filters" field in each fact lets the frontend render clickable evidence chips.
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -89,6 +103,21 @@ RESPONSE_SCHEMA = {
                     "label": {"type": "string"},
                     "value": {"type": "string"},
                     "source": {"type": "string"},
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "from": {"type": "string"},
+                            "to": {"type": "string"},
+                            "category_id": {"type": "integer"},
+                            "merchant": {"type": "string"},
+                            "transaction_id": {"type": "integer"},
+                            "import_id": {"type": "integer"},
+                            "uncategorized": {"type": "boolean"},
+                            "min_amount_cents": {"type": "integer"},
+                            "max_amount_cents": {"type": "integer"},
+                        },
+                        "required": [],
+                    },
                 },
                 "required": ["label", "value", "source"],
             },
@@ -169,13 +198,12 @@ async def pull_model_stream(model: str) -> AsyncIterator[str]:
                     yield line + "\n"
 
 
-# ── Financial overview (lightweight — tools handle detail queries) ─────────────
+# ── Financial overview (lightweight) ─────────────────────────────────────────
 
 def build_financial_context(db: Session) -> str:
     """
     Build a compact monthly-level overview for the system prompt.
-    The LLM uses tools (search_transactions, get_month_detail, etc.)
-    for any queries that need individual transaction detail.
+    The LLM uses tools for any queries that need individual transaction detail.
     """
     txs = (
         db.query(Transaction)
@@ -208,7 +236,8 @@ def build_financial_context(db: Session) -> str:
 
     lines = [
         f"Data range: {first_date} → {last_date}  (today: {today})",
-        f"Transactions: {len(txs)}  |  All-time income: ${all_income:,.2f}  |  All-time expenses: ${all_expenses:,.2f}  |  Net: ${all_income - all_expenses:,.2f}",
+        f"Transactions: {len(txs)}  |  All-time income: ${all_income:,.2f}  |  "
+        f"All-time expenses: ${all_expenses:,.2f}  |  Net: ${all_income - all_expenses:,.2f}",
         "",
         f"{'Month':<10}  {'Income':>12}  {'Expenses':>12}  {'Net':>12}  {'Txns':>5}",
         "-" * 58,
@@ -221,6 +250,19 @@ def build_financial_context(db: Session) -> str:
             f"  ${net_m:>11,.2f}  {m['count']:>4}"
         )
     return "\n".join(lines)
+
+
+# ── Redaction detection ───────────────────────────────────────────────────────
+
+def _detect_raw_description_request(messages: list[dict]) -> bool:
+    """Return True if any user message explicitly requests raw transaction descriptions."""
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = (msg.get("content") or "").lower()
+        if any(phrase in content for phrase in _RAW_DESC_PHRASES):
+            return True
+    return False
 
 
 # ── Validation ────────────────────────────────────────────────────────────────
@@ -245,12 +287,10 @@ def _validate_response(data: Any) -> bool:
 # ── SSE helpers ───────────────────────────────────────────────────────────────
 
 def _sse(event: str, data: dict) -> str:
-    """Format a Server-Sent Event line."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 def _tool_label(name: str, args: dict) -> str:
-    """Human-readable description of a tool call for the UI."""
     if name == "search_transactions":
         return f'Searching for "{args.get("query", "")}"'
     if name == "get_month_detail":
@@ -283,24 +323,22 @@ async def chat_stream(
     """
     Agentic chat with tool-calling.  Streams SSE events:
 
-      event: thinking   data: {"message": "..."}
-      event: tool_call  data: {"id": N, "name": "...", "label": "...", "args": {...}}
+      event: thinking    data: {"message": "..."}
+      event: tool_call   data: {"id": N, "name": "...", "label": "...", "args": {...}}
       event: tool_result data: {"id": N, "name": "...", "summary": "..."}
-      event: answer     data: {model, answer, facts_used, follow_ups, tools_called}
-      event: error      data: {"message": "..."}
-      event: done       data: {}
-
-    IMPORTANT: Ollama does not support sending 'tools' and 'format' in the same
-    request.  The agentic loop uses 'tools' (no format); the final structured-
-    output call uses 'format' (no tools).
+      event: answer      data: {model, answer, facts_used, follow_ups, tools_called}
+      event: error       data: {"message": "..."}
+      event: done        data: {}
     """
     from .transaction_tools import TOOLS, execute_tool
 
     context = build_financial_context(db)
-    # Pull the last user message so Phase 2 can re-anchor to it
     original_question = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
     )
+
+    # Determine once whether raw descriptions are permitted for this session
+    include_raw = _detect_raw_description_request(messages)
 
     system_msg = {
         "role": "system",
@@ -310,7 +348,7 @@ async def chat_stream(
             "1. THE APP ITSELF: You know exactly how DigitalSov works — how to import data, "
             "manage categories and rules, use profiles, export tax reports, and everything in "
             "the Docs tab. Answer app questions directly from your knowledge.\n\n"
-            "2. THE USER'S FINANCES: You have full access to the user's transaction history "
+            "2. THE USER'S FINANCES: You have access to the user's transaction history "
             "through the tools below. Use tools to look up specific financial data.\n\n"
             "USE TOOLS when you need:\n"
             "  • A specific merchant or keyword  → search_transactions\n"
@@ -319,14 +357,15 @@ async def chat_stream(
             "  • Biggest income or expense items → get_largest_transactions\n"
             "  • Category totals for any period  → summarize_period\n\n"
             "STRICT RULES — read carefully:\n"
-            "  1. Answer ONLY the question the user actually asked. Never answer a different question.\n"
-            "  2. If the user asks to 'show' or 'list' transactions, your answer MUST include those transactions.\n"
+            "  1. Answer ONLY the question the user actually asked.\n"
+            "  2. If the user asks to 'show' or 'list' transactions, include them in your answer.\n"
             "  3. Do not call get_month_detail unless the user explicitly asks about a month overview.\n"
-            "  4. Use ONLY data returned by tools — do not use the monthly overview below to fabricate transaction details.\n"
+            "  4. Use ONLY data returned by tools — never fabricate transaction details.\n"
             "  5. Never invent sources. Only cite tool names you actually called.\n"
             "  6. Always provide 2-3 follow-up questions relevant to what was asked.\n"
+            "  7. Tool results show at most 200 rows — they are a bounded sample, not the full ledger.\n"
             + DIGITALSOV_DOCS
-            + "\n=== Financial Overview (for context only — use tools for specifics) ===\n"
+            + "\n=== Financial Overview (monthly summary — use tools for specifics) ===\n"
             + context
         ),
     }
@@ -338,7 +377,7 @@ async def chat_stream(
 
     yield _sse("thinking", {"message": "Analyzing your question…"})
 
-    # ── Phase 1: Agentic tool-calling loop (no 'format') ─────────────────
+    # ── Phase 1: Agentic tool-calling loop ────────────────────────────────
     async with httpx.AsyncClient(timeout=120.0) as client:
         for _iteration in range(MAX_TOOL_ITERATIONS):
             r = await client.post(
@@ -358,7 +397,6 @@ async def chat_stream(
                 final_text = msg.get("content", "")
                 break
 
-            # Append the assistant's tool-calling turn
             all_messages.append({
                 "role": "assistant",
                 "content": msg.get("content", ""),
@@ -368,7 +406,6 @@ async def chat_stream(
             for tc in tool_calls:
                 fn = tc.get("function", {})
                 name: str = fn.get("name", "")
-                # Ollama returns arguments as a pre-parsed dict (not a JSON string)
                 args: dict = fn.get("arguments", {})
                 if isinstance(args, str):
                     try:
@@ -379,7 +416,7 @@ async def chat_stream(
                 label = _tool_label(name, args)
                 yield _sse("tool_call", {"id": tool_idx, "name": name, "label": label, "args": args})
 
-                result_text = execute_tool(name, args, db)
+                result_text = execute_tool(name, args, db, include_raw=include_raw)
                 summary = result_text.split("\n")[0].strip()
 
                 tools_called.append({"id": tool_idx, "name": name, "label": label, "summary": summary})
@@ -388,7 +425,7 @@ async def chat_stream(
                 all_messages.append({"role": "tool", "content": result_text})
                 tool_idx += 1
 
-    # ── Phase 2: Structured output (no 'tools') ───────────────────────────
+    # ── Phase 2: Structured output ────────────────────────────────────────
     yield _sse("thinking", {"message": "Formatting response…"})
 
     structure_messages = all_messages + [
@@ -398,7 +435,14 @@ async def chat_stream(
                 f'The user\'s original question was: "{original_question}"\n\n'
                 "Answer THAT question — and only that question — using the tool results above. "
                 "Do not answer a different question. "
-                "If the user asked to see specific transactions, include them in your answer field. "
+                "If the user asked to see specific transactions, include them in your answer field.\n\n"
+                "For each fact in facts_used, populate the optional 'filters' field with whatever "
+                "values would let the user verify that fact by browsing the matching transactions:\n"
+                "  • 'from' and 'to' for date ranges (YYYY-MM-DD)\n"
+                "  • 'merchant' for merchant name searches\n"
+                "  • 'category_id' (use the numeric id shown in tool results, e.g. category_id=5)\n"
+                "  • 'uncategorized' = true for uncategorized transaction facts\n"
+                "Only include filter fields that are genuinely relevant to that specific fact.\n\n"
                 "Respond ONLY with a valid JSON object."
             ),
         }
@@ -423,8 +467,13 @@ async def chat_stream(
             "content": (
                 f'Reminder: the user asked "{original_question}". '
                 "Answer ONLY that question. "
-                'Respond ONLY with a JSON object: "answer" (string), '
-                '"facts_used" (array of {label, value, source}), "follow_ups" (array of strings).'
+                "Respond ONLY with a JSON object matching this exact schema: "
+                '"answer" (string), '
+                '"facts_used" (array of objects, each with "label" string, "value" string, '
+                '"source" string, and optional "filters" object with fields: '
+                '"from", "to" date strings, "category_id" integer, "merchant" string, '
+                '"uncategorized" boolean), '
+                '"follow_ups" (array of strings).'
             ),
         }
         result = await _structured(structure_messages + [correction])

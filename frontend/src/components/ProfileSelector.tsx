@@ -118,67 +118,91 @@ export default function ProfileSelector() {
 
         {!loading && profiles.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "1.25rem" }}>
-            {profiles.map((name) => (
-              <div
-                key={name}
-                style={{ display: "flex", gap: "0.5rem", alignItems: "stretch" }}
-              >
-                <button
-                  onClick={() => selectProfile(name)}
-                  style={{
-                    flex: 1,
-                    background: "var(--surface-raised)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "var(--radius)",
-                    color: "var(--text)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "0.8125rem",
-                    padding: "0.625rem 1rem",
-                    textAlign: "left",
-                    cursor: "pointer",
-                    transition: "border-color 0.15s",
-                  }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--accent)";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--border)";
-                  }}
+            {profiles.map((name) => {
+              const isDemo = name === "sample";
+              return (
+                <div
+                  key={name}
+                  style={{ display: "flex", gap: "0.5rem", alignItems: "stretch" }}
                 >
-                  {name}
-                </button>
-                {profiles.length > 1 && (
                   <button
-                    onClick={() => handleDelete(name)}
-                    disabled={deleting === name}
-                    title={`Delete profile "${name}"`}
+                    onClick={() => selectProfile(name)}
                     style={{
-                      background: "transparent",
-                      border: "1px solid var(--border)",
+                      flex: 1,
+                      background: isDemo ? "rgba(245,158,11,0.06)" : "var(--surface-raised)",
+                      border: `1px solid ${isDemo ? "rgba(245,158,11,0.35)" : "var(--border)"}`,
                       borderRadius: "var(--radius)",
-                      color: "var(--text-muted)",
+                      color: "var(--text)",
                       fontFamily: "var(--font-mono)",
-                      fontSize: "0.75rem",
-                      padding: "0 0.6rem",
+                      fontSize: "0.8125rem",
+                      padding: "0.625rem 1rem",
+                      textAlign: "left",
                       cursor: "pointer",
-                      transition: "color 0.15s, border-color 0.15s",
+                      transition: "border-color 0.15s",
                     }}
                     onMouseEnter={(e) => {
-                      const b = e.currentTarget as HTMLButtonElement;
-                      b.style.color = "var(--red)";
-                      b.style.borderColor = "var(--red-border)";
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = isDemo ? "#f59e0b" : "var(--accent)";
                     }}
                     onMouseLeave={(e) => {
-                      const b = e.currentTarget as HTMLButtonElement;
-                      b.style.color = "var(--text-muted)";
-                      b.style.borderColor = "var(--border)";
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = isDemo ? "rgba(245,158,11,0.35)" : "var(--border)";
                     }}
                   >
-                    ✕
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <span>{name}</span>
+                      {isDemo && (
+                        <span style={{
+                          fontSize: "0.6rem",
+                          fontWeight: 700,
+                          letterSpacing: "0.08em",
+                          padding: "0.1rem 0.35rem",
+                          background: "rgba(245,158,11,0.15)",
+                          color: "#f59e0b",
+                          border: "1px solid rgba(245,158,11,0.4)",
+                          borderRadius: "2px",
+                        }}>
+                          DEMO
+                        </span>
+                      )}
+                    </div>
+                    {isDemo && (
+                      <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "0.2rem", fontWeight: 400 }}>
+                        Explore features with fictional data
+                      </div>
+                    )}
                   </button>
-                )}
-              </div>
-            ))}
+                  {profiles.length > 1 && (
+                    <button
+                      onClick={() => handleDelete(name)}
+                      disabled={deleting === name}
+                      title={`Delete profile "${name}"`}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius)",
+                        color: "var(--text-muted)",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "0.75rem",
+                        padding: "0 0.6rem",
+                        cursor: "pointer",
+                        transition: "color 0.15s, border-color 0.15s",
+                      }}
+                      onMouseEnter={(e) => {
+                        const b = e.currentTarget as HTMLButtonElement;
+                        b.style.color = "var(--red)";
+                        b.style.borderColor = "var(--red-border)";
+                      }}
+                      onMouseLeave={(e) => {
+                        const b = e.currentTarget as HTMLButtonElement;
+                        b.style.color = "var(--text-muted)";
+                        b.style.borderColor = "var(--border)";
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

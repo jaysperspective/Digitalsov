@@ -1,9 +1,28 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Table, Text
 from sqlalchemy.orm import relationship
 
 from .database import Base
+
+# ── Association table for transaction ↔ tag many-to-many ──────────────────────
+
+transaction_tags = Table(
+    "transaction_tags",
+    Base.metadata,
+    Column(
+        "transaction_id",
+        Integer,
+        ForeignKey("transactions.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "tag_id",
+        Integer,
+        ForeignKey("tags.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
 
 
 class Setting(Base):
@@ -75,8 +94,14 @@ class Transaction(Base):
     amount_cents = Column(Integer, nullable=False)
     currency = Column(String(3), nullable=False, default="USD")
     merchant = Column(String(255), nullable=True)
+    merchant_canonical = Column(String(255), nullable=True)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
-    category_source = Column(String(20), nullable=True)   # "rule" | "manual" | None
+    category_source = Column(
+        String(20),
+        nullable=False,
+        default="uncategorized",
+        server_default="'uncategorized'",
+    )  # "rule" | "manual" | "uncategorized"
     category_rule_id = Column(Integer, ForeignKey("rules.id"), nullable=True)
     fingerprint_hash = Column(String(64), nullable=False, unique=True, index=True)
     transaction_type = Column(String(20), nullable=False, default="normal")
@@ -86,3 +111,31 @@ class Transaction(Base):
     import_record = relationship("Import", back_populates="transactions")
     category = relationship("Category", back_populates="transactions")
     category_rule = relationship("Rule", foreign_keys=[category_rule_id])
+    tags = relationship("Tag", secondary=transaction_tags, back_populates="transactions", lazy="select")
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(Text, nullable=False, unique=True)
+    color = Column(Text, nullable=True)   # hex color, e.g. "#6366f1"
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    transactions = relationship(
+        "Transaction", secondary=transaction_tags, back_populates="tags", lazy="select"
+    )
+
+
+class MerchantAlias(Base):
+    __tablename__ = "merchant_aliases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alias = Column(String(255), nullable=False)       # raw text matched case-insensitively
+    canonical = Column(String(255), nullable=False)   # the display/grouping name
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

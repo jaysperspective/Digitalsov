@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { exportTransactionsCsv, fetchTransactions, getCategories, patchTransactionCategory } from "../api/client";
-import type { Category, Transaction, TransactionListResponse } from "../types";
+import { createMerchantAlias, exportTransactionsCsv, fetchTransactions, patchTransactionCategory, setTransactionTags } from "../api/client";
+import { useFinance } from "../context/FinanceContext";
+import type { Category, Tag, Transaction, TransactionFilters, TransactionListResponse } from "../types";
 
 interface Props {
-  refreshKey: number;
   filterImportId?: number | null;
+  initialFilters?: TransactionFilters | null;
 }
 
 const PAGE_SIZE = 50;
@@ -45,6 +46,224 @@ function ProvenanceDot({ source }: { source: string | null }) {
         verticalAlign: "middle",
       }}
     />
+  );
+}
+
+// ── Tag pills + inline picker ─────────────────────────────────────────────────
+
+function TagPills({
+  tx,
+  allTags,
+  onUpdated,
+}: {
+  tx: Transaction;
+  allTags: Tag[];
+  onUpdated: (txId: number, tags: Tag[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const currentIds = new Set((tx.tags ?? []).map((t) => t.id));
+
+  async function toggle(tagId: number) {
+    const next = currentIds.has(tagId)
+      ? [...currentIds].filter((id) => id !== tagId)
+      : [...currentIds, tagId];
+    setSaving(true);
+    try {
+      const updated = await setTransactionTags(tx.id, next);
+      onUpdated(tx.id, updated);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.2rem", alignItems: "center" }}>
+      {(tx.tags ?? []).map((t) => (
+        <span
+          key={t.id}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.2rem",
+            padding: "0.05rem 0.4rem",
+            borderRadius: "9999px",
+            fontSize: "0.65rem",
+            fontWeight: 600,
+            background: (t.color ?? "#94a3b8") + "22",
+            color: t.color ?? "var(--text-secondary)",
+            border: `1px solid ${(t.color ?? "#94a3b8")}44`,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {t.name}
+        </span>
+      ))}
+      {allTags.length > 0 && (
+        <button
+          onClick={() => setOpen((v) => !v)}
+          disabled={saving}
+          title="Add/remove tags"
+          style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--text-muted)", fontSize: "0.6rem", padding: "0.05rem 0.25rem", cursor: "pointer", lineHeight: 1 }}
+        >
+          {saving ? "…" : "⊕"}
+        </button>
+      )}
+      {open && (
+        <div
+          style={{
+            marginTop: "0.25rem",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            padding: "0.375rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.2rem",
+            minWidth: "120px",
+          }}
+        >
+          {allTags.map((t) => (
+            <label
+              key={t.id}
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", fontSize: "0.75rem", cursor: "pointer", padding: "0.15rem 0.25rem" }}
+            >
+              <input
+                type="checkbox"
+                checked={currentIds.has(t.id)}
+                onChange={() => toggle(t.id)}
+                style={{ accentColor: t.color ?? "var(--accent)" }}
+              />
+              <span
+                style={{
+                  display: "inline-block",
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  background: t.color ?? "var(--text-muted)",
+                  flexShrink: 0,
+                }}
+              />
+              {t.name}
+            </label>
+          ))}
+          <button
+            onClick={() => setOpen(false)}
+            style={{ fontSize: "0.65rem", marginTop: "0.25rem", padding: "0.1rem", background: "transparent", border: "none", color: "var(--text-muted)", cursor: "pointer" }}
+          >
+            Close
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Merchant cell with quick-alias ────────────────────────────────────────────
+
+function MerchantCell({ tx, onAliased }: { tx: Transaction; onAliased: (canonical: string) => void }) {
+  const [aliasOpen, setAliasOpen] = useState(false);
+  const [aliasInput, setAliasInput] = useState(tx.merchant ?? "");
+  const [canonicalInput, setCanonicalInput] = useState(tx.merchant_canonical ?? tx.merchant ?? "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const displayName = tx.merchant_canonical ?? tx.merchant;
+  const hasAlias = tx.merchant_canonical && tx.merchant_canonical !== tx.merchant;
+
+  const handleSubmit = async () => {
+    if (!aliasInput.trim() || !canonicalInput.trim()) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await createMerchantAlias({ alias: aliasInput.trim(), canonical: canonicalInput.trim() });
+      onAliased(canonicalInput.trim());
+      setAliasOpen(false);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+        <span style={{ color: "var(--text-secondary)" }} title={hasAlias ? `Raw: ${tx.merchant}` : undefined}>
+          {displayName ?? "—"}
+        </span>
+        {tx.merchant && (
+          <button
+            onClick={() => {
+              setAliasInput(tx.merchant ?? "");
+              setCanonicalInput(tx.merchant_canonical ?? tx.merchant ?? "");
+              setAliasOpen((v) => !v);
+            }}
+            title="Add/edit alias for this merchant"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--text-muted)",
+              fontSize: "0.65rem",
+              cursor: "pointer",
+              padding: "0 0.15rem",
+              lineHeight: 1,
+              opacity: 0.6,
+            }}
+          >
+            ✎
+          </button>
+        )}
+      </div>
+      {hasAlias && (
+        <div style={{ fontSize: "0.65rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: "0.1rem" }}>
+          {tx.merchant}
+        </div>
+      )}
+      {aliasOpen && (
+        <div
+          style={{
+            marginTop: "0.375rem",
+            padding: "0.5rem",
+            background: "var(--surface-raised)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.3rem",
+          }}
+        >
+          <input
+            value={aliasInput}
+            onChange={(e) => setAliasInput(e.target.value)}
+            placeholder="alias"
+            style={{ fontSize: "0.75rem", padding: "0.2rem 0.3rem" }}
+          />
+          <input
+            value={canonicalInput}
+            onChange={(e) => setCanonicalInput(e.target.value)}
+            placeholder="canonical name"
+            style={{ fontSize: "0.75rem", padding: "0.2rem 0.3rem" }}
+          />
+          <div style={{ display: "flex", gap: "0.25rem" }}>
+            <button
+              onClick={handleSubmit}
+              disabled={saving}
+              style={{ fontSize: "0.7rem", padding: "0.15rem 0.5rem", background: "var(--accent)", color: "#fff", border: "none" }}
+            >
+              {saving ? "…" : "Save"}
+            </button>
+            <button
+              onClick={() => setAliasOpen(false)}
+              style={{ fontSize: "0.7rem", padding: "0.15rem 0.5rem", background: "transparent", color: "var(--text-muted)", border: "1px solid var(--border)" }}
+            >
+              Cancel
+            </button>
+          </div>
+          {err && <span style={{ fontSize: "0.7rem", color: "var(--red)" }}>{err}</span>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -136,28 +355,25 @@ function CategoryCell({
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-export default function TransactionList({ refreshKey, filterImportId = null }: Props) {
+export default function TransactionList({ filterImportId = null, initialFilters = null }: Props) {
+  const { refreshKey, categories, tags: allTags } = useFinance();
   const [data, setData] = useState<TransactionListResponse | null>(null);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Filter state
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [filterCategoryId, setFilterCategoryId] = useState<number | null>(null);
-  const [filterUncategorized, setFilterUncategorized] = useState(false);
-
-  // Load categories for filter dropdown and inline edit
-  useEffect(() => {
-    getCategories()
-      .then(setCategories)
-      .catch(() => {/* non-critical */});
-  }, [refreshKey]);
+  // Filter state — seeded from initialFilters on mount (component is key-remounted by App)
+  const [filterCategoryId, setFilterCategoryId] = useState<number | null>(() => initialFilters?.category_id ?? null);
+  const [filterUncategorized, setFilterUncategorized] = useState(() => initialFilters?.uncategorized ?? false);
+  const [filterFromDate, setFilterFromDate] = useState<string>(() => initialFilters?.from_date ?? "");
+  const [filterToDate, setFilterToDate] = useState<string>(() => initialFilters?.to_date ?? "");
+  const [filterMerchant, setFilterMerchant] = useState<string>(() => initialFilters?.merchant_search ?? "");
+  const [filterTagId, setFilterTagId] = useState<number | null>(null);
 
   // Reset to first page when any filter changes
   useEffect(() => {
     setOffset(0);
-  }, [filterImportId, refreshKey, filterCategoryId, filterUncategorized]);
+  }, [filterImportId, refreshKey, filterCategoryId, filterUncategorized, filterFromDate, filterToDate, filterMerchant, filterTagId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,6 +385,11 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
         import_id: filterImportId,
         category_id: filterUncategorized ? null : filterCategoryId,
         uncategorized: filterUncategorized,
+        from_date: filterFromDate || null,
+        to_date: filterToDate || null,
+        merchant_search: filterMerchant || null,
+        tag_id: filterTagId,
+        include_tags: true,
       });
       setData(res);
     } catch (e: unknown) {
@@ -176,7 +397,7 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
     } finally {
       setLoading(false);
     }
-  }, [offset, filterImportId, filterCategoryId, filterUncategorized, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [offset, filterImportId, filterCategoryId, filterUncategorized, filterFromDate, filterToDate, filterMerchant, filterTagId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     load();
@@ -187,6 +408,29 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
     setData((prev) =>
       prev
         ? { ...prev, items: prev.items.map((t) => (t.id === updated.id ? updated : t)) }
+        : prev
+    );
+  };
+
+  // Update tags in local state after inline picker change
+  const handleTagsUpdated = (txId: number, tags: Tag[]) => {
+    setData((prev) =>
+      prev
+        ? { ...prev, items: prev.items.map((t) => (t.id === txId ? { ...t, tags } : t)) }
+        : prev
+    );
+  };
+
+  // Update merchant_canonical in local state after quick-alias
+  const handleAliased = (txId: number, canonical: string) => {
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            items: prev.items.map((t) =>
+              t.id === txId ? { ...t, merchant_canonical: canonical } : t
+            ),
+          }
         : prev
     );
   };
@@ -209,6 +453,32 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
         <span style={{ color: "var(--text-secondary)", fontSize: "0.8125rem", marginRight: "auto" }}>
           {data != null ? `${data.total.toLocaleString()} transactions` : ""}
         </span>
+
+        {/* Date range */}
+        <input
+          type="date"
+          value={filterFromDate}
+          onChange={(e) => setFilterFromDate(e.target.value)}
+          title="From date"
+          style={{ fontSize: "0.8125rem", padding: "0.25rem 0.375rem" }}
+        />
+        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>–</span>
+        <input
+          type="date"
+          value={filterToDate}
+          onChange={(e) => setFilterToDate(e.target.value)}
+          title="To date"
+          style={{ fontSize: "0.8125rem", padding: "0.25rem 0.375rem" }}
+        />
+
+        {/* Merchant search */}
+        <input
+          type="text"
+          value={filterMerchant}
+          onChange={(e) => setFilterMerchant(e.target.value)}
+          placeholder="Merchant…"
+          style={{ fontSize: "0.8125rem", padding: "0.25rem 0.5rem", width: "120px" }}
+        />
 
         {/* Category filter */}
         <select
@@ -241,6 +511,20 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
           Uncategorized only
         </label>
 
+        {/* Tag filter */}
+        {allTags.length > 0 && (
+          <select
+            value={filterTagId ?? ""}
+            onChange={(e) => setFilterTagId(e.target.value === "" ? null : Number(e.target.value))}
+            style={{ fontSize: "0.8125rem", padding: "0.25rem 0.5rem" }}
+          >
+            <option value="">All tags</option>
+            {allTags.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        )}
+
         <button onClick={load} disabled={loading}>
           {loading ? "Loading…" : "Refresh"}
         </button>
@@ -250,6 +534,9 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
             import_id: filterImportId,
             category_id: filterUncategorized ? null : filterCategoryId,
             uncategorized: filterUncategorized,
+            from_date: filterFromDate || null,
+            to_date: filterToDate || null,
+            merchant_search: filterMerchant || null,
           })}
           download="transactions_export.csv"
           style={{
@@ -299,13 +586,14 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
               <th style={{ textAlign: "right" }}>Amount</th>
               <th>CCY</th>
               <th>Import</th>
+              {allTags.length > 0 && <th>Tags</th>}
             </tr>
           </thead>
           <tbody>
             {!data || data.items.length === 0 ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={allTags.length > 0 ? 8 : 7}
                   style={{
                     textAlign: "center",
                     color: "var(--text-muted)",
@@ -340,8 +628,11 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
                       </span>
                     )}
                   </td>
-                  <td style={{ color: "var(--text-secondary)" }}>
-                    {tx.merchant ?? "—"}
+                  <td>
+                    <MerchantCell
+                      tx={tx}
+                      onAliased={(canonical) => handleAliased(tx.id, canonical)}
+                    />
                   </td>
                   <td>
                     <CategoryCell
@@ -368,6 +659,11 @@ export default function TransactionList({ refreshKey, filterImportId = null }: P
                   </td>
                   <td style={{ color: "var(--text-muted)" }}>{tx.currency}</td>
                   <td style={{ color: "var(--text-muted)" }}>#{tx.import_id}</td>
+                  {allTags.length > 0 && (
+                    <td style={{ minWidth: "100px" }}>
+                      <TagPills tx={tx} allTags={allTags} onUpdated={handleTagsUpdated} />
+                    </td>
+                  )}
                 </tr>
               );})
             )}

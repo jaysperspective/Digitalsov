@@ -1,5 +1,7 @@
 import type {
   ApplyRulesResponse,
+  ApplySuggestionRequest,
+  ApplySuggestionResponse,
   AuditFlag,
   CandleData,
   Category,
@@ -8,20 +10,28 @@ import type {
   ChatMessage,
   ChatSSEEvent,
   ColumnMappingInput,
+  DataHealthReport,
   ImportRecord,
   ImportResult,
   IncomeHousingReport,
   LLMSettings,
+  MerchantAlias,
+  MerchantAliasCreate,
   MonthlySummary,
   NetWorthReport,
   OllamaModel,
   PDFPreviewResponse,
+  PeriodComparison,
   PeriodSummary,
   PreviewResponse,
   PullProgress,
   RecurringGroup,
   Rule,
   RuleCreate,
+  RuleSuggestionsResponse,
+  Tag,
+  TagCreate,
+  TagUpdate,
   TransactionListResponse,
   TransferCandidate,
 } from "../types";
@@ -143,6 +153,9 @@ export function fetchTransactions(params: {
   uncategorized?: boolean;
   from_date?: string | null;
   to_date?: string | null;
+  merchant_search?: string | null;
+  tag_id?: number | null;
+  include_tags?: boolean;
 }): Promise<TransactionListResponse> {
   const q = new URLSearchParams();
   if (params.limit != null) q.set("limit", String(params.limit));
@@ -152,6 +165,9 @@ export function fetchTransactions(params: {
   if (params.uncategorized) q.set("uncategorized", "true");
   if (params.from_date) q.set("from_date", params.from_date);
   if (params.to_date) q.set("to_date", params.to_date);
+  if (params.merchant_search) q.set("merchant_search", params.merchant_search);
+  if (params.tag_id != null) q.set("tag_id", String(params.tag_id));
+  if (params.include_tags) q.set("include_tags", "true");
   return request(`/transactions/?${q}`);
 }
 
@@ -257,6 +273,7 @@ export function exportTransactionsCsv(params: {
   uncategorized?: boolean;
   from_date?: string | null;
   to_date?: string | null;
+  merchant_search?: string | null;
 }): string {
   const q = new URLSearchParams();
   if (params.import_id != null) q.set("import_id", String(params.import_id));
@@ -264,6 +281,7 @@ export function exportTransactionsCsv(params: {
   if (params.uncategorized) q.set("uncategorized", "true");
   if (params.from_date) q.set("from_date", params.from_date);
   if (params.to_date) q.set("to_date", params.to_date);
+  if (params.merchant_search) q.set("merchant_search", params.merchant_search);
   q.set("profile", getActiveProfile());
   return `${BASE}/transactions/export?${q}`;
 }
@@ -476,4 +494,111 @@ export function createProfile(name: string): Promise<{ name: string }> {
 
 export function deleteProfile(name: string): Promise<void> {
   return request(`/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+// ── Merchant Aliases ──────────────────────────────────────────────────────────
+
+export function getMerchantAliases(): Promise<MerchantAlias[]> {
+  return request("/merchants/aliases");
+}
+
+export function createMerchantAlias(payload: MerchantAliasCreate): Promise<MerchantAlias> {
+  return request("/merchants/aliases", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateMerchantAlias(id: number, payload: MerchantAliasCreate): Promise<MerchantAlias> {
+  return request(`/merchants/aliases/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteMerchantAlias(id: number): Promise<void> {
+  return request(`/merchants/aliases/${id}`, { method: "DELETE" });
+}
+
+export function rebuildCanonicalMerchants(): Promise<{ updated: number; total: number }> {
+  return request("/merchants/rebuild-canonical", { method: "POST" });
+}
+
+// ── Data Health ────────────────────────────────────────────────────────────────
+
+export function getDataHealth(): Promise<DataHealthReport> {
+  return request("/reports/data-health");
+}
+
+// ── Tags ──────────────────────────────────────────────────────────────────────
+
+export function getTags(): Promise<Tag[]> {
+  return request("/tags/");
+}
+
+export function createTag(payload: TagCreate): Promise<Tag> {
+  return request("/tags/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateTag(id: number, payload: TagUpdate): Promise<Tag> {
+  return request(`/tags/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteTag(id: number): Promise<void> {
+  return request(`/tags/${id}`, { method: "DELETE" });
+}
+
+export function getTransactionTags(txId: number): Promise<Tag[]> {
+  return request(`/transactions/${txId}/tags`);
+}
+
+export function setTransactionTags(txId: number, tagIds: number[]): Promise<Tag[]> {
+  return request(`/transactions/${txId}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tag_ids: tagIds }),
+  });
+}
+
+// ── Period Comparison ─────────────────────────────────────────────────────────
+
+export function getPeriodComparison(params: {
+  fromA: string;
+  toA: string;
+  fromB: string;
+  toB: string;
+  limit_merchants?: number;
+}): Promise<PeriodComparison> {
+  const q = new URLSearchParams({
+    fromA: params.fromA,
+    toA: params.toA,
+    fromB: params.fromB,
+    toB: params.toB,
+  });
+  if (params.limit_merchants != null) q.set("limit_merchants", String(params.limit_merchants));
+  return request(`/reports/compare?${q}`);
+}
+
+// ── Rule Suggestions ──────────────────────────────────────────────────────────
+
+export function getRuleSuggestions(): Promise<RuleSuggestionsResponse> {
+  return request("/rules/suggestions");
+}
+
+export function applyRuleSuggestion(payload: ApplySuggestionRequest): Promise<ApplySuggestionResponse> {
+  return request("/rules/suggestions/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }

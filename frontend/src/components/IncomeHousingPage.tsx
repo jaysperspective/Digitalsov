@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getIncomeHousing } from "../api/client";
+import { useFinance } from "../context/FinanceContext";
 import type { IncomeHousingReport, IncomeHousingTransaction, TrackedGroup } from "../types";
-
-interface Props {
-  refreshKey: number;
-}
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -272,7 +269,8 @@ function GroupSection({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function IncomeHousingPage({ refreshKey }: Props) {
+export default function IncomeHousingPage() {
+  const { refreshKey } = useFinance();
   const currentYear = new Date().getFullYear().toString();
   const [year, setYear] = useState<string>(currentYear);
   const [report, setReport] = useState<IncomeHousingReport | null>(null);

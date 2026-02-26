@@ -1,7 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
-
-from pydantic import BaseModel, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, computed_field, model_validator
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +156,34 @@ class PatchImportLabel(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tags
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TagCreate(BaseModel):
+    name: str
+    color: Optional[str] = None
+
+
+class TagUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+
+
+class TagSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    color: Optional[str] = None
+    created_at: datetime
+
+
+class TagAssignRequest(BaseModel):
+    tag_ids: list[int]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Transactions
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -171,6 +198,7 @@ class TransactionSchema(BaseModel):
     amount_cents: int
     currency: str
     merchant: Optional[str]
+    merchant_canonical: Optional[str] = None
     category_id: Optional[int]
     category_name: Optional[str] = None
     category_color: Optional[str] = None
@@ -184,6 +212,7 @@ class TransactionSchema(BaseModel):
     category_rule_match_type: Optional[str] = None
     category_rule_priority: Optional[int] = None
     created_at: datetime
+    tags: list[TagSchema] = []
 
     @computed_field
     @property
@@ -277,6 +306,44 @@ class ChatRequest(BaseModel):
     use_fast_mode: Optional[bool] = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Merchant Aliases
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class MerchantAliasCreate(BaseModel):
+    alias: str
+    canonical: str
+
+
+class MerchantAliasSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    alias: str
+    canonical: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data Health
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class DataHealthResponse(BaseModel):
+    uncategorized_count: int
+    imports_missing_account_label_count: int
+    merchants_uncanonicalized_count: int
+    possible_duplicates_count: int
+    transfer_candidates_count: int
+    active_rules_count: int
+    last_import_date: Optional[str]
+    total_transactions: int
+    top_problem_merchants: list[dict]
+    recommendations: list[str]
+
+
 class FactUsed(BaseModel):
     label: str
     value: str
@@ -288,3 +355,21 @@ class ChatResponse(BaseModel):
     answer: str
     facts_used: list[FactUsed]
     follow_ups: list[str]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule Suggestions
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ApplySuggestionRequest(BaseModel):
+    merchant: str
+    match_type: Literal["contains", "regex", "exact"]
+    pattern: str
+    category_id: int
+    priority: int = 60
+
+
+class ApplySuggestionResponse(BaseModel):
+    created_rule_id: int
+    updated_transactions_count: int
